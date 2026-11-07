@@ -33,6 +33,11 @@ interface Meta {
   chatSeq: number;
   /** seats flagged to be removed at the end of the current hand */
   leaving: number[];
+  /** host config change waiting for the next hand */
+  pendingConfig: TableConfig | null;
+  /** seats that were sat out automatically because they disconnected; they come back on reconnect */
+  autoSatOut: number[];
+  timerKey?: string;
 }
 
 interface Attachment {
@@ -99,6 +104,7 @@ export class TableDO extends DurableObject<Env> {
     this.meta = {
       code: args.code, name: args.name, hostId: args.hostId, hostName: args.hostName, status: "waiting",
       createdAt: Date.now(), timer: null, rebuyRequests: [], departed: [], logSeq: 0, chatSeq: 0, leaving: [],
+      pendingConfig: null, autoSatOut: [],
     };
     this.game = createGame(validateConfig(args.config));
     this.log("system", `Table created by ${args.hostName}.`);
@@ -129,10 +135,16 @@ export class TableDO extends DurableObject<Env> {
 
     // reconnect: clear disconnected flag
     const seat = this.seatOf(userId);
-    if (seat && seat.disconnected) {
+    if (seat && (seat.disconnected || this.meta.autoSatOut.includes(seat.seat))) {
       seat.disconnected = false;
-      this.save();
-      this.broadcast();
+      if (this.meta.autoSatOut.includes(seat.seat)) {
+        this.meta.autoSatOut = this.meta.autoSatOut.filter((x) => x !== seat.seat);
+        if (seat.status === "sittingOut") {
+          seat.status = "active";
+          this.log("system", `${seat.name} is back.`);
+        }
+      }
+      this.afterChange();
     } else {
       this.sendState(server);
     }
@@ -251,6 +263,7 @@ export class TableDO extends DurableObject<Env> {
         const seat = this.seatOf(att.userId);
         if (!seat) throw new EngineError("not_seated", "You are not seated");
         seat.status = "sittingOut";
+        meta.autoSatOut = meta.autoSatOut.filter((x) => x !== seat.seat);
         this.log("system", `${seat.name} is sitting out.`);
         this.afterChange();
         return;
@@ -261,6 +274,7 @@ export class TableDO extends DurableObject<Env> {
         if (!seat) throw new EngineError("not_seated", "You are not seated");
         seat.status = "active";
         seat.disconnected = false;
+        meta.autoSatOut = meta.autoSatOut.filter((x) => x !== seat.seat);
         this.log("system", `${seat.name} is back in.`);
         this.afterChange();
         return;
@@ -360,7 +374,8 @@ export class TableDO extends DurableObject<Env> {
         if (merged.ante !== g.config.ante) changes.push(`ante → ${merged.ante}`);
         if (merged.actionTimerMs !== g.config.actionTimerMs) changes.push(`timer → ${Math.round(merged.actionTimerMs / 1000)}s`);
         if (merged.startingStack !== g.config.startingStack) changes.push(`buy-in → ${merged.startingStack}`);
-        g.config = merged; // takes effect from the next hand; live hand keeps its own variant copy
+        if (isHandLive(g)) meta.pendingConfig = merged; // applied by beginHand so the live hand's rules never change
+        else g.config = merged;
         if (changes.length) this.log("system", `Host changed ${changes.join(", ")}${isHandLive(g) ? " (from next hand)" : ""}.`);
         this.afterChange();
         void accounts(this.env).updateTable(meta.code, {
@@ -384,9 +399,15 @@ export class TableDO extends DurableObject<Env> {
 
   private beginHand() {
     const g = this.game!;
-    // players who dropped off before the hand sit out automatically
+    const meta = this.meta!;
+    if (meta.pendingConfig) {
+      g.config = meta.pendingConfig;
+      meta.pendingConfig = null;
+    }
+    // players who dropped off before the hand sit out automatically (and return when they reconnect)
     for (const s of g.seats) if (s && s.disconnected && s.status === "active") {
       s.status = "sittingOut";
+      if (!meta.autoSatOut.includes(s.seat)) meta.autoSatOut.push(s.seat);
       this.log("system", `${s.name} is sitting out (disconnected).`);
     }
     if (!canStartHand(g)) {
@@ -454,12 +475,12 @@ export class TableDO extends DurableObject<Env> {
     }
     // keep an existing timer of the same kind for the same action step (don't reset the clock on unrelated changes)
     const seq = h?.actionSeq ?? -1;
-    const prevKey = (meta as Meta & { timerKey?: string }).timerKey;
+    const prevKey = meta.timerKey;
     const key = timer ? `${timer.kind}:${h?.number ?? 0}:${seq}` : null;
     if (timer && prevKey === key && meta.timer && meta.timer.at > now) {
       return; // same step, timer already running
     }
-    (meta as Meta & { timerKey?: string }).timerKey = key ?? undefined;
+    meta.timerKey = key ?? undefined;
     meta.timer = timer;
     if (timer) void this.ctx.storage.setAlarm(timer.at);
     else void this.ctx.storage.deleteAlarm();
@@ -547,13 +568,14 @@ export class TableDO extends DurableObject<Env> {
     const entry: Departed = {
       userId: seat.playerId, name: seat.name,
       buyIn: seat.totalBuyIn + (prior?.buyIn ?? 0),
-      cashOut: seat.stack + seat.pendingAdd * 0 + (prior?.cashOut ?? 0),
+      cashOut: seat.stack + (prior?.cashOut ?? 0),
       handsPlayed: seat.handsPlayed + (prior?.handsPlayed ?? 0),
       biggestPot: Math.max(seat.biggestPot, prior?.biggestPot ?? 0),
     };
     meta.departed = meta.departed.filter((d) => d.userId !== seat.playerId);
     meta.departed.push(entry);
     meta.rebuyRequests = meta.rebuyRequests.filter((r) => r.playerId !== seat.playerId);
+    meta.autoSatOut = meta.autoSatOut.filter((x) => x !== seatNo);
     this.game = removePlayer(g, seatNo);
   }
 
@@ -591,7 +613,7 @@ export class TableDO extends DurableObject<Env> {
     }
     meta.status = "ended";
     meta.timer = null;
-    (meta as Meta & { timerKey?: string }).timerKey = undefined;
+    meta.timerKey = undefined;
     void this.ctx.storage.deleteAlarm();
     const results = this.sessionResults();
     this.log("system", "Session ended by the host.");
