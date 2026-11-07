@@ -29,7 +29,7 @@ export function HandsList({ hands, onOpen, send }: { hands: HandSummary[] | null
   );
 }
 
-export function ReplayView({ rec, onBack, send, mySeat }: { rec: HandRecordView | undefined; onBack: () => void; send: (m: ClientMessage) => void; mySeat: number | null }) {
+export function ReplayView({ rec, onBack, send, mySeat, equityOn = true }: { rec: HandRecordView | undefined; onBack: () => void; send: (m: ClientMessage) => void; mySeat: number | null; equityOn?: boolean }) {
   const stages = useMemo(() => (rec ? buildStages(rec) : []), [rec]);
   const [equity, setEquity] = useState<Record<string, { seats: number[]; equity: number[]; exact: boolean }>>({});
   const [computing, setComputing] = useState(false);
@@ -38,7 +38,7 @@ export function ReplayView({ rec, onBack, send, mySeat }: { rec: HandRecordView 
 
   useEffect(() => {
     setEquity({});
-    if (!rec) return;
+    if (!rec || !equityOn) return;
     const req = equityRequest(rec, stages, ++reqId.current);
     if (!req) return;
     workerRef.current ??= new Worker(new URL("../lib/equity.worker.ts", import.meta.url), { type: "module" });
@@ -54,7 +54,7 @@ export function ReplayView({ rec, onBack, send, mySeat }: { rec: HandRecordView 
     w.addEventListener("message", onMsg);
     w.postMessage(req);
     return () => w.removeEventListener("message", onMsg);
-  }, [rec, stages]);
+  }, [rec, stages, equityOn]);
 
   useEffect(() => () => workerRef.current?.terminate(), []);
 
@@ -94,7 +94,7 @@ export function ReplayView({ rec, onBack, send, mySeat }: { rec: HandRecordView 
       )}
 
       {stages.map((st) => (
-        <StageBlock key={st.key} st={st} rec={rec} eq={equity[st.key]} name={name} mySeat={mySeat} locked={locked} />
+        <StageBlock key={st.key} st={st} rec={rec} eq={equity[st.key]} name={name} mySeat={mySeat} locked={locked} equityOn={equityOn} />
       ))}
 
       <section className="card-surface p-3 space-y-2">
@@ -127,7 +127,7 @@ export function ReplayView({ rec, onBack, send, mySeat }: { rec: HandRecordView 
   );
 }
 
-function StageBlock({ st, rec, eq, name, mySeat, locked }: { st: Stage; rec: HandRecordView; eq?: { seats: number[]; equity: number[]; exact: boolean }; name: (s: number) => string; mySeat: number | null; locked: boolean }) {
+function StageBlock({ st, rec, eq, name, mySeat, locked, equityOn }: { st: Stage; rec: HandRecordView; eq?: { seats: number[]; equity: number[]; exact: boolean }; name: (s: number) => string; mySeat: number | null; locked: boolean; equityOn: boolean }) {
   const eqOf = (seat: number) => (eq ? eq.equity[eq.seats.indexOf(seat)] : undefined);
   const best = eq ? Math.max(...eq.equity) : -1;
   return (
@@ -150,7 +150,7 @@ function StageBlock({ st, rec, eq, name, mySeat, locked }: { st: Stage; rec: Han
               </div>
               <span className={`text-sm font-semibold w-20 truncate shrink-0 ${seat === mySeat ? "text-blue" : ""}`}>{name(seat)}</span>
               <div className="flex-1 min-w-0">
-                {locked ? (
+                {locked || !equityOn ? (
                   <div className="h-2 rounded-full bg-surface-3" />
                 ) : e === undefined ? (
                   <div className="h-2 rounded-full skeleton" />
@@ -158,7 +158,7 @@ function StageBlock({ st, rec, eq, name, mySeat, locked }: { st: Stage; rec: Han
                   <div className="h-2 rounded-full bg-surface-3 overflow-hidden"><div className={`h-full rounded-full ${e === best ? "bg-gold" : "bg-blue"}`} style={{ width: `${e}%`, transition: "width 400ms var(--ease-out-quint)" }} /></div>
                 )}
               </div>
-              <span className={`text-sm num font-bold w-12 text-right shrink-0 ${locked ? "text-dim" : e === best ? "text-gold-bright" : ""}`}>{locked ? "–" : e === undefined ? "" : `${e}%`}</span>
+              <span className={`text-sm num font-bold w-12 text-right shrink-0 ${locked || !equityOn ? "text-dim" : e === best ? "text-gold-bright" : ""}`}>{locked || !equityOn ? "–" : e === undefined ? "" : `${e}%`}</span>
               <div className="hidden sm:flex gap-1 flex-wrap justify-end w-36 shrink-0">
                 {acts.map((a, i) => <span key={i} className={`pill normal-case tracking-normal ${a.kind === "fold" ? "pill-red" : a.kind === "bet" || a.kind === "raise" ? "pill-gold" : ""}`}>{a.text}</span>)}
               </div>

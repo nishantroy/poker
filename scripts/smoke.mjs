@@ -123,6 +123,48 @@ send(A, { t: "options", patch: { autoUnlockReplays: true } });
 await wait(200);
 assert(A.view.options.autoUnlockReplays === true, "host can change table options");
 
+// ----- feature flags -----
+const admin = await login("smoke_admin", "1234"); // ADMIN_USERS=smoke_admin in .dev.vars
+const setFlag = async (name, enabled) => {
+  const r = await fetch(`${BASE}/api/admin/flags`, { method: "PUT", headers: { "content-type": "application/json", cookie: admin.cookie }, body: JSON.stringify({ name, enabled }) });
+  if (!r.ok) throw new Error(`setFlag ${name} ${r.status}`);
+  return (await r.json()).flags;
+};
+// a previous aborted run may have left flags off; start clean
+for (const [name, on] of Object.entries((await (await fetch(`${BASE}/api/flags`)).json()).flags)) if (!on) await setFlag(name, true);
+const meAdmin = await (await fetch(`${BASE}/api/me`, { headers: { cookie: admin.cookie } })).json();
+assert(meAdmin.isAdmin === true && meAdmin.flags && meAdmin.flags.chat === true, "admin sees isAdmin and default flags");
+const meA = await (await fetch(`${BASE}/api/me`, { headers: { cookie: a.cookie } })).json();
+const notAdmin = await fetch(`${BASE}/api/admin/flags`, { method: "PUT", headers: { "content-type": "application/json", cookie: a.cookie }, body: JSON.stringify({ name: "chat", enabled: false }) });
+assert(meA.isAdmin === true || notAdmin.status === 403, "non-admin cannot change flags");
+try {
+  const f1 = await setFlag("chat", false);
+  assert(f1.chat === false, "admin turned chat off");
+  await wait(150);
+  assert(A.view.flags.chat === false, "flag pushed to the open table view");
+  const chatErrs = A.errors.length;
+  send(A, { t: "chat", text: "hello?" });
+  await wait(150);
+  assert(A.errors.length === chatErrs + 1 && A.errors.at(-1).code === "disabled", "chat rejected while flag is off");
+  await setFlag("signup", false);
+  const closed = await fetch(`${BASE}/api/signup`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: `smoke_z_${suffix}`, pin: "1234" }) });
+  assert(closed.status === 403, "signup blocked while flag is off");
+  await setFlag("hud", false);
+  await wait(150);
+  assert(Object.keys(A.view.hud).length === 0, "HUD hidden from view while flag is off");
+  const hudOff = await fetch(`${BASE}/api/hud?ids=${a.user.id}`, { headers: { cookie: a.cookie } });
+  assert(hudOff.status === 403, "HUD API blocked while flag is off");
+} finally {
+  await setFlag("chat", true);
+  await setFlag("signup", true);
+  const restored = await setFlag("hud", true);
+  assert(Object.values(restored).every((v) => v === true), "all flags restored");
+}
+await wait(150);
+assert(A.view.flags.hud === true && Object.keys(A.view.hud).length > 0, "HUD back after flag restored");
+const pub = await (await fetch(`${BASE}/api/flags`)).json();
+assert(pub.flags && Object.keys(pub.flags).length >= 10, "public flags endpoint");
+
 send(A, { t: "end" });
 await wait(600);
 assert(Array.isArray(A.ended) && A.ended.length === 2, "session ended with results for both players");
@@ -133,7 +175,7 @@ assert(stats.stats.sessions === 1, "profile stats recorded one session");
 assert(stats.stats.hud.hands >= 1, "lifetime HUD updated at session end");
 const hudApi = await (await fetch(`${BASE}/api/hud?ids=${a.user.id},${b.user.id}`, { headers: { cookie: a.cookie } })).json();
 assert(hudApi.rows.length === 2, "HUD API returns both players");
-assert(A.errors.length === 0 && B2.errors.length === 0, "no unexpected socket errors");
+assert(A.errors.every((e) => e.code === "disabled") && B2.errors.length === 0, "no unexpected socket errors");
 A.ws.close(); B2.ws.close();
 console.log("\nSMOKE PASSED");
 process.exit(0);

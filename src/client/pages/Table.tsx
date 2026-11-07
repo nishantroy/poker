@@ -11,6 +11,7 @@ import { ActionBar, DiscardBar } from "../components/ActionBar";
 import { EndedModal, HostPanel, LogChat, PlayerMenu, SitSheet, type SideTab } from "../components/Panels";
 import { HudStrip, PlayerSheet } from "../components/Hud";
 import { Toast } from "../components/ui";
+import { useAuth } from "../lib/auth";
 
 /** Seat anchor positions (percent of the table area), index 0 = bottom centre, proceeding clockwise on screen. */
 function anchors(n: number, landscape: boolean): { x: number; y: number }[] {
@@ -70,11 +71,14 @@ function useBeep() {
 
 export function TablePage({ code }: { code: string }) {
   const { view, log, chat, status, error, ended, send, offset, notFound, hands, records } = useTable(code);
+  const { flags: authFlags } = useAuth();
   const landscape = useMedia("(orientation: landscape) and (min-width: 640px)");
   const [sitSeat, setSitSeat] = useState<number | null>(null);
   const [panel, setPanel] = useState<null | "host" | "me" | "log">(null);
   const [logTab, setLogTab] = useState<SideTab>("log");
-  const [hudOn, setHudOn] = useState(() => { try { return localStorage.getItem("fp:hud") !== "0"; } catch { return true; } });
+  const [hudPref, setHudOn] = useState(() => { try { return localStorage.getItem("fp:hud") !== "0"; } catch { return true; } });
+  const flags = view?.flags ?? authFlags;
+  const hudOn = hudPref && flags.hud;
   const toggleHud = () => setHudOn((v) => { try { localStorage.setItem("fp:hud", v ? "0" : "1"); } catch { /* ignore */ } return !v; });
   const [playerSheet, setPlayerSheet] = useState<number | null>(null);
   const [selectedCard, setSelectedCard] = useState<number | null>(null);
@@ -106,9 +110,9 @@ export function TablePage({ code }: { code: string }) {
   useEffect(() => {
     if (turnKey && turnKey !== lastTurnKey.current) {
       lastTurnKey.current = turnKey;
-      beep();
+      if (flags.sounds) beep();
     }
-  }, [turnKey, beep]);
+  }, [turnKey, beep, flags.sounds]);
 
   useEffect(() => { setSelectedCard(null); }, [view?.hand?.number, view?.hand?.phase]);
   useEffect(() => {
@@ -185,15 +189,19 @@ export function TablePage({ code }: { code: string }) {
           <Link2 size={13} className="text-dim shrink-0" aria-hidden="true" />
         </button>
         {status !== "open" && <span className="pill pill-red shrink-0">{status === "reconnecting" ? "reconnecting…" : status}</span>}
-        <button className="btn btn-ghost btn-sm px-2" onClick={toggleHud} aria-label={hudOn ? "Hide HUD" : "Show HUD"} aria-pressed={hudOn}>
-          <BarChart3 size={18} className={hudOn ? "text-gold" : ""} />
-        </button>
-        <button className="btn btn-ghost btn-sm px-2" onClick={toggle} aria-label={muted ? "Unmute turn alerts" : "Mute turn alerts"} aria-pressed={!muted}>
-          {muted ? <BellOff size={18} /> : <Bell size={18} />}
-        </button>
-        <button className="btn btn-ghost btn-sm px-2 relative" onClick={() => setPanel("log")} aria-label="Log and chat">
-          {unreadChat > 0 ? <MessageSquare size={18} /> : <ScrollText size={18} />}
-          {unreadChat > 0 && <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 rounded-full bg-gold text-on-gold text-[10px] font-black flex items-center justify-center">{unreadChat}</span>}
+        {flags.hud && (
+          <button className="btn btn-ghost btn-sm px-2" onClick={toggleHud} aria-label={hudOn ? "Hide HUD" : "Show HUD"} aria-pressed={hudOn}>
+            <BarChart3 size={18} className={hudOn ? "text-gold" : ""} />
+          </button>
+        )}
+        {flags.sounds && (
+          <button className="btn btn-ghost btn-sm px-2" onClick={toggle} aria-label={muted ? "Unmute turn alerts" : "Mute turn alerts"} aria-pressed={!muted}>
+            {muted ? <BellOff size={18} /> : <Bell size={18} />}
+          </button>
+        )}
+        <button className="btn btn-ghost btn-sm px-2 relative" onClick={() => setPanel("log")} aria-label={flags.chat ? "Log and chat" : "Hand log"}>
+          {unreadChat > 0 && flags.chat ? <MessageSquare size={18} /> : <ScrollText size={18} />}
+          {unreadChat > 0 && flags.chat && <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 rounded-full bg-gold text-on-gold text-[10px] font-black flex items-center justify-center">{unreadChat}</span>}
         </button>
         <button className="btn btn-ghost btn-sm px-2" onClick={() => setPanel("me")} aria-label="Your options"><User size={18} /></button>
         {view.me.isHost && (
@@ -317,7 +325,7 @@ export function TablePage({ code }: { code: string }) {
       <SitSheet open={sitSeat !== null} seat={sitSeat} config={view.config} onClose={() => setSitSeat(null)} onSit={(seat, buyIn) => { send({ t: "sit", seat, buyIn }); setSitSeat(null); }} />
       <HostPanel open={panel === "host"} onClose={() => setPanel(null)} view={view} send={send} />
       <PlayerMenu open={panel === "me"} onClose={() => setPanel(null)} view={view} send={send} />
-      <LogChat open={panel === "log"} onClose={() => setPanel(null)} log={log} chat={chat} send={send} tab={logTab} setTab={setLogTab} hands={hands} records={records} mySeat={mySeat} />
+      <LogChat open={panel === "log"} onClose={() => setPanel(null)} log={log} chat={chat} send={send} tab={logTab} setTab={setLogTab} hands={hands} records={records} mySeat={mySeat} flags={flags} />
       <PlayerSheet seat={playerSheet !== null ? view.seats[playerSheet] ?? null : null} session={playerSheet !== null ? view.hud[view.seats[playerSheet]?.playerId ?? ""] : undefined} onClose={() => setPlayerSheet(null)} />
       {ended && <EndedModal results={ended} me={view.me.userId} />}
     </div>

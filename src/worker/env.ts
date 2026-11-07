@@ -5,6 +5,8 @@ export interface Env {
   TABLE: DurableObjectNamespace<TableDO>;
   ACCOUNTS: DurableObjectNamespace<AccountsDO>;
   ASSETS: Fetcher;
+  /** Comma-separated usernames allowed to change feature flags (see src/shared/flags.ts). */
+  ADMIN_USERS?: string;
 }
 
 export function accounts(env: Env) {

@@ -5,4 +5,3 @@ dist/
 *.log
 .DS_Store
 worker-configuration.d.ts
-.dev.vars

@@ -1,0 +1,43 @@
+/**
+ * Feature flags: operator-level kill switches. Every feature defaults to ON; an admin turns one off
+ * from the profile page when something misbehaves, without a redeploy. Flags live in AccountsDO and
+ * are pushed to every active table, so a change takes effect within a second everywhere.
+ *
+ * `server: true` flags are enforced by the Worker / Durable Objects as well as hidden in the UI.
+ * The rest are client-only behaviour.
+ */
+export const FLAG_DEFS = {
+  hud: { label: "HUD", hint: "Per-player stat strip and the stats sheet on avatar tap.", server: true },
+  replays: { label: "Hand replays", hint: "The Hands tab, hand records and reveal votes.", server: true },
+  equity: { label: "Replay equities", hint: "Equity bars inside unlocked replays (computed on the player's device).", server: false },
+  rabbitHunt: { label: "Rabbit hunting", hint: "Revealing the undealt board after an early finish.", server: true },
+  chat: { label: "Table chat", hint: "The Chat tab at every table.", server: true },
+  variants: { label: "Omaha & Pineapple", hint: "Off: new tables are Hold'em only and running tables switch to Hold'em from the next hand.", server: true },
+  leaderboard: { label: "Leaderboard", hint: "The lobby leaderboard and lifetime results API.", server: true },
+  signup: { label: "New signups", hint: "Off: only existing accounts can log in.", server: true },
+  createTables: { label: "Creating tables", hint: "Off: nobody can open a new table. Running tables are unaffected.", server: true },
+  sounds: { label: "Turn sounds", hint: "The turn chime and vibration on phones.", server: false },
+} as const;
+
+export type FlagName = keyof typeof FLAG_DEFS;
+export type Flags = Record<FlagName, boolean>;
+
+export const FLAG_NAMES = Object.keys(FLAG_DEFS) as FlagName[];
+
+export function defaultFlags(): Flags {
+  return Object.fromEntries(FLAG_NAMES.map((n) => [n, true])) as Flags;
+}
+
+/** Fill in defaults for anything missing or malformed (old records, partial payloads). */
+export function normalizeFlags(input: unknown): Flags {
+  const out = defaultFlags();
+  if (typeof input === "object" && input) {
+    const o = input as Record<string, unknown>;
+    for (const n of FLAG_NAMES) if (typeof o[n] === "boolean") out[n] = o[n] as boolean;
+  }
+  return out;
+}
+
+export function isFlagName(x: unknown): x is FlagName {
+  return typeof x === "string" && x in FLAG_DEFS;
+}

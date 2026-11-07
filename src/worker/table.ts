@@ -10,6 +10,7 @@ import type {
   TableStatus, TableView, TimerInfo,
 } from "@shared/protocol";
 import { LIMITS, defaultOptions, validateConfig } from "@shared/protocol";
+import { type Flags, defaultFlags, normalizeFlags } from "@shared/flags";
 import { accounts, type Env } from "./env";
 
 interface Departed {
@@ -51,6 +52,8 @@ interface Meta {
   votes: Record<string, string[]>;
   /** rabbit hunt revealed for this hand number */
   rabbitShown: number | null;
+  /** operator feature flags, pushed from AccountsDO and refreshed on every connection */
+  flags: Flags;
 }
 
 interface Attachment {
@@ -98,6 +101,7 @@ export class TableDO extends DurableObject<Env> {
         this.meta = {
           ...m, options: { ...defaultOptions(), ...(m.options ?? {}) }, hud: m.hud ?? {}, cur: m.cur ?? null, unlocked: m.unlocked ?? [],
           votes: m.votes ?? {}, rabbitShown: m.rabbitShown ?? null, pendingConfig: m.pendingConfig ?? null, autoSatOut: m.autoSatOut ?? [],
+          flags: normalizeFlags(m.flags),
         } as Meta;
       }
       if (r.key === "game") this.game = JSON.parse(r.value) as GameState;
@@ -119,12 +123,13 @@ export class TableDO extends DurableObject<Env> {
 
   // ---------- RPC (from the Worker) ----------
 
-  async init(args: { code: string; name: string; hostId: string; hostName: string; config: TableConfig }): Promise<void> {
+  async init(args: { code: string; name: string; hostId: string; hostName: string; config: TableConfig; flags?: Flags }): Promise<void> {
     if (this.meta) return;
     this.meta = {
       code: args.code, name: args.name, hostId: args.hostId, hostName: args.hostName, status: "waiting",
       createdAt: Date.now(), timer: null, rebuyRequests: [], departed: [], logSeq: 0, chatSeq: 0, leaving: [],
       pendingConfig: null, autoSatOut: [], options: defaultOptions(), hud: {}, cur: null, unlocked: [], votes: {}, rabbitShown: null,
+      flags: args.flags ? normalizeFlags(args.flags) : defaultFlags(),
     };
     this.game = createGame(validateConfig(args.config));
     this.log("system", `Table created by ${args.hostName}.`);
@@ -139,6 +144,30 @@ export class TableDO extends DurableObject<Env> {
     };
   }
 
+  /** Pushed by AccountsDO when an admin flips a flag. */
+  async setFlags(flags: Flags): Promise<void> {
+    if (!this.meta || !this.game) return;
+    this.applyFlags(normalizeFlags(flags), true);
+  }
+
+  private applyFlags(flags: Flags, announce: boolean) {
+    const meta = this.meta!;
+    const g = this.game!;
+    const changed = JSON.stringify(flags) !== JSON.stringify(meta.flags);
+    meta.flags = flags;
+    // Variants off: fall back to Hold'em, from the next hand if one is live.
+    const target = meta.pendingConfig ?? g.config;
+    if (!flags.variants && target.variant !== "nlhe") {
+      const cfg = { ...target, variant: "nlhe" as const };
+      if (isHandLive(g)) meta.pendingConfig = cfg;
+      else g.config = cfg;
+      this.log("system", `Omaha and Pineapple are switched off for now; this table plays Hold'em${isHandLive(g) ? " from the next hand" : ""}.`);
+      void accounts(this.env).updateTable(meta.code, { variant: "nlhe", smallBlind: cfg.smallBlind, bigBlind: cfg.bigBlind });
+    }
+    if (changed && announce) this.afterChange();
+    else if (changed) this.save();
+  }
+
   // ---------- WebSocket lifecycle ----------
 
   async fetch(request: Request): Promise<Response> {
@@ -147,6 +176,10 @@ export class TableDO extends DurableObject<Env> {
     const userId = request.headers.get("x-user-id");
     const name = request.headers.get("x-user-name");
     if (!userId || !name) return new Response("unauthorized", { status: 401 });
+    const rawFlags = request.headers.get("x-flags");
+    if (rawFlags) {
+      try { this.applyFlags(normalizeFlags(JSON.parse(rawFlags)), false); } catch { /* ignore malformed */ }
+    }
 
     const pair = new WebSocketPair();
     const [client, server] = [pair[0], pair[1]];
@@ -229,11 +262,16 @@ export class TableDO extends DurableObject<Env> {
       throw new EngineError("ended", "This table has ended");
     }
 
+    const requireFlag = (on: boolean) => {
+      if (!on) throw new EngineError("disabled", "That feature is switched off right now");
+    };
+
     switch (msg.t) {
       case "ping":
         return this.send(ws, { t: "pong", serverTime: Date.now() });
 
       case "chat": {
+        requireFlag(meta.flags.chat);
         const text = String(msg.text ?? "").trim().slice(0, LIMITS.maxChatLen);
         if (!text) return;
         const m: ChatMessage = { id: ++meta.chatSeq, userId: att.userId, name: att.name, text, ts: Date.now() };
@@ -388,6 +426,7 @@ export class TableDO extends DurableObject<Env> {
         requireHost();
         const g = this.game!;
         const merged = validateConfig({ ...g.config, ...msg.patch, maxSeats: g.config.maxSeats });
+        if (!meta.flags.variants && merged.variant !== "nlhe") throw new EngineError("disabled", "Omaha and Pineapple are switched off right now");
         const changes: string[] = [];
         if (merged.variant !== g.config.variant) changes.push(`game → ${VARIANTS[merged.variant].name}`);
         if (merged.smallBlind !== g.config.smallBlind || merged.bigBlind !== g.config.bigBlind) changes.push(`blinds → ${merged.smallBlind}/${merged.bigBlind}`);
@@ -424,6 +463,7 @@ export class TableDO extends DurableObject<Env> {
         const g = this.game!;
         const h = g.hand;
         if (!this.seatOf(att.userId)) throw new EngineError("not_seated", "Only seated players can rabbit hunt");
+        requireFlag(meta.flags.rabbitHunt);
         if (!meta.options.rabbitHunt) throw new EngineError("rabbit_off", "Rabbit hunting is turned off");
         if (!h || h.phase !== "showdown" || h.board.length >= 5) throw new EngineError("no_rabbit", "Nothing to rabbit hunt");
         if (meta.rabbitShown === h.number) return;
@@ -435,11 +475,13 @@ export class TableDO extends DurableObject<Env> {
       }
 
       case "listHands": {
+        requireFlag(meta.flags.replays);
         this.send(ws, { t: "hands", hands: this.handSummaries(att.userId) });
         return;
       }
 
       case "getHand": {
+        requireFlag(meta.flags.replays);
         const rec = this.loadRecord(Number(msg.number));
         if (!rec) throw new EngineError("no_such_hand", "That hand is not available");
         this.send(ws, { t: "hand", hand: this.recordView(rec, att.userId) });
@@ -447,6 +489,7 @@ export class TableDO extends DurableObject<Env> {
       }
 
       case "vote": {
+        requireFlag(meta.flags.replays);
         const n = Number(msg.number);
         const rec = this.loadRecord(n);
         if (!rec) throw new EngineError("no_such_hand", "That hand is not available");
@@ -813,13 +856,13 @@ export class TableDO extends DurableObject<Env> {
           pendingDiscard: [...h.pendingDiscard], result: h.result, actionSeq: h.actionSeq, button: h.button,
           smallBlindSeat: h.smallBlindSeat, bigBlindSeat: h.bigBlindSeat,
           rabbit: h.phase === "showdown" && meta.rabbitShown === h.number ? this.rabbitCards(h) : null,
-          rabbitAvailable: h.phase === "showdown" && h.board.length < 5 && meta.options.rabbitHunt && meta.rabbitShown !== h.number && !!mySeat,
+          rabbitAvailable: h.phase === "showdown" && h.board.length < 5 && meta.flags.rabbitHunt && meta.options.rabbitHunt && meta.rabbitShown !== h.number && !!mySeat,
         }
       : null;
 
     return {
       code: meta.code, name: meta.name, status: meta.status, hostId: meta.hostId, config: g.config, seats, button: g.button,
-      handCount: g.handCount, hand, timer: meta.timer, options: meta.options, hud: meta.hud, rebuyRequests: userId === meta.hostId ? meta.rebuyRequests : meta.rebuyRequests.filter((r) => r.playerId === userId),
+      handCount: g.handCount, hand, timer: meta.timer, options: meta.options, hud: meta.flags.hud ? meta.hud : {}, flags: meta.flags, rebuyRequests: userId === meta.hostId ? meta.rebuyRequests : meta.rebuyRequests.filter((r) => r.playerId === userId),
       me: { userId, seat: mySeat?.seat ?? null, limits, isHost: userId === meta.hostId },
       serverTime: Date.now(),
     };

@@ -44,6 +44,12 @@ The first deploy creates the two Durable Object classes via the `v1` migration i
 - **Reconnect:** the client reconnects with exponential backoff and receives the full state on open. A dropped player is auto-folded by the timer and sits out from the next hand until they return.
 - **Session end:** the host ends the session; each player's buy-in, cash-out, net, hands and biggest pot are written to `AccountsDO`, which powers the leaderboard and profile pages.
 
+## Feature flags (kill switches)
+
+Every optional feature has an operator flag in `src/shared/flags.ts` (HUD, replays, replay equities, rabbit hunting, chat, Omaha/Pineapple variants, leaderboard, signups, creating tables, turn sounds). All default to on. Admins see a **Feature flags** section on their profile page; flipping one is stored in `AccountsDO` and pushed to every open table at once, so a misbehaving feature can be switched off mid-session without a redeploy. Server-enforced flags also reject the underlying messages/API calls, not just hide the UI.
+
+Admins are the usernames in the `ADMIN_USERS` var in `wrangler.jsonc` (comma-separated) plus the first account ever created. `.dev.vars` sets `ADMIN_USERS=smoke_admin` for local dev so the smoke test can exercise the admin API.
+
 ## HUD, replays, equity and rabbit hunting
 
 - **HUD:** tap the bar-chart icon at the table to show a mini strip under each player (VPIP/PFR · AF · hands). Tap any avatar for the full session + lifetime table. Session counters are computed in `TableDO` from each finished hand (`src/engine/hud.ts`) and added to lifetime totals in `AccountsDO` when the host ends the session.

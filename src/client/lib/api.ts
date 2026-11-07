@@ -1,4 +1,5 @@
-import type { HudRow, LeaderboardRow, TableConfig, TableSummary, UserInfo, UserStats } from "@shared/protocol";
+import type { HudRow, LeaderboardRow, MeResponse, TableConfig, TableSummary, UserInfo, UserStats } from "@shared/protocol";
+import type { FlagName, Flags } from "@shared/flags";
 
 export class ApiError extends Error {
   constructor(public status: number, public code: string, message: string) {
@@ -18,7 +19,9 @@ async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 export const api = {
-  me: () => call<{ user: UserInfo | null }>("/api/me"),
+  me: () => call<MeResponse>("/api/me"),
+  flags: () => call<{ flags: Flags }>("/api/flags"),
+  setFlag: (name: FlagName, enabled: boolean) => call<{ flags: Flags }>("/api/admin/flags", { method: "PUT", body: JSON.stringify({ name, enabled }) }),
   login: (username: string, pin: string) => call<{ user: UserInfo }>("/api/login", { method: "POST", body: JSON.stringify({ username, pin }) }),
   signup: (username: string, pin: string) => call<{ user: UserInfo }>("/api/signup", { method: "POST", body: JSON.stringify({ username, pin }) }),
   logout: () => call<{ ok: true }>("/api/logout", { method: "POST" }),

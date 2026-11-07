@@ -6,6 +6,7 @@
   "compatibility_flags": ["nodejs_compat"],
   "alias": {
     "@shared/protocol": "./src/shared/protocol.ts",
+    "@shared/flags": "./src/shared/flags.ts",
     "@engine/index": "./src/engine/index.ts",
     "@engine/cards": "./src/engine/cards.ts",
     "@engine/types": "./src/engine/types.ts",
@@ -30,5 +31,9 @@
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["TableDO", "AccountsDO"] }
   ],
+  "vars": {
+    // Comma-separated usernames that may flip feature flags. The first account ever created is always an admin.
+    "ADMIN_USERS": ""
+  },
   "observability": { "enabled": true }
 }

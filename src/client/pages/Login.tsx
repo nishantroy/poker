@@ -4,7 +4,7 @@ import { useAuth } from "../lib/auth";
 import { Field } from "../components/ui";
 
 export function LoginPage() {
-  const { setUser } = useAuth();
+  const { setUser, flags } = useAuth();
   const [mode, setMode] = useState<"login" | "signup">("login");
   const [username, setUsername] = useState("");
   const [pin, setPin] = useState("");
@@ -16,7 +16,7 @@ export function LoginPage() {
     setErr(null);
     setBusy(true);
     try {
-      const r = mode === "login" ? await api.login(username.trim(), pin) : await api.signup(username.trim(), pin);
+      const r = mode === "login" || !flags.signup ? await api.login(username.trim(), pin) : await api.signup(username.trim(), pin);
       setUser(r.user);
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : "Could not reach the server");
@@ -37,6 +37,7 @@ export function LoginPage() {
         </div>
 
         <div className="card-surface p-5">
+          {flags.signup ? (
           <div className="grid grid-cols-2 gap-1 p-1 rounded-xl bg-surface-2 mb-5" role="tablist">
             {(["login", "signup"] as const).map((m) => (
               <button key={m} role="tab" aria-selected={mode === m} onClick={() => { setMode(m); setErr(null); }}
@@ -45,6 +46,9 @@ export function LoginPage() {
               </button>
             ))}
           </div>
+          ) : (
+            <p className="text-xs text-dim mb-4">Signups are closed right now. Log in with an existing account.</p>
+          )}
           <form onSubmit={submit} className="space-y-4">
             <Field label="Username">
               <input className="input" autoComplete="username" autoCapitalize="none" spellCheck={false} value={username}
@@ -56,7 +60,7 @@ export function LoginPage() {
             </Field>
             {err && <p className="text-sm text-[#ff8b8e] font-medium" role="alert">{err}</p>}
             <button className="btn btn-primary w-full" disabled={busy || pin.length < 4 || username.trim().length < 2}>
-              {busy ? "…" : mode === "login" ? "Log in" : "Create account"}
+              {busy ? "…" : mode === "login" || !flags.signup ? "Log in" : "Create account"}
             </button>
           </form>
         </div>

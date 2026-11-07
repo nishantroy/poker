@@ -2,8 +2,9 @@ import type { Card } from "@engine/cards";
 import type { Variant } from "@engine/variants";
 import type { Action, ActionLimits, HandResult, Phase, Street, TableConfig } from "@engine/types";
 import type { HandRecord, HudCounters } from "@engine/hud";
+import type { Flags } from "./flags";
 
-export type { Card, Variant, Action, ActionLimits, HandResult, Phase, Street, TableConfig, HandRecord, HudCounters };
+export type { Card, Variant, Action, ActionLimits, HandResult, Phase, Street, TableConfig, HandRecord, HudCounters, Flags };
 
 /** Table-level options that the engine does not care about. */
 export interface TableOptions {
@@ -124,6 +125,8 @@ export interface TableView {
   options: TableOptions;
   /** Session HUD counters per userId (everyone currently seated, plus departed players). */
   hud: Record<string, HudCounters>;
+  /** Operator feature flags in force at this table. */
+  flags: Flags;
   me: {
     userId: string;
     seat: number | null;
@@ -198,6 +201,13 @@ export interface UserInfo {
   id: string;
   username: string;
   createdAt: number;
+}
+
+/** GET /api/me */
+export interface MeResponse {
+  user: UserInfo | null;
+  isAdmin: boolean;
+  flags: Flags;
 }
 
 export interface LeaderboardRow {

@@ -11,6 +11,7 @@ See the root `/Users/nishantroy/code/AGENTS.md` for shared conventions (ports, w
 - Durable Objects are SQLite-backed (`new_sqlite_classes`). Never call `ws.accept()`; use `ctx.acceptWebSocket` and the hibernation handlers. Never `setTimeout` in a DO; schedule alarms via `TableDO.schedule()`.
 - Hole cards are only ever placed in a view by `TableDO.viewFor()`. Keep it that way; `scripts/smoke.mjs` asserts privacy.
 - Shared types live in `src/shared/protocol.ts`; the client never imports from `src/worker`.
+- New optional features get a flag in `src/shared/flags.ts` (default on), enforced server-side where the feature has a server half (`requireFlag` in `TableDO.handle`, `flags.*` checks in the Worker router) and hidden in the UI via `view.flags` (table) or `useAuth().flags` (elsewhere).
 - Path aliases (`@engine/*`, `@shared/*`) are declared in `tsconfig.base.json`, `vite.config.ts`, `vitest.config.ts` and `wrangler.jsonc` (`alias`). Add new engine modules to the wrangler alias list.
 
 ## Validation

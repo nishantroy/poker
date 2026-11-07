@@ -11,7 +11,7 @@ import { Field, Sheet, Toast } from "../components/ui";
 import { Logo } from "./Login";
 
 export function LobbyPage() {
-  const { user, logout } = useAuth();
+  const { user, logout, flags } = useAuth();
   const [tables, setTables] = useState<TableSummary[] | null>(null);
   const [board, setBoard] = useState<LeaderboardRow[] | null>(null);
   const [create, setCreate] = useState(false);
@@ -20,8 +20,8 @@ export function LobbyPage() {
 
   useEffect(() => {
     api.myTables().then((r) => setTables(r.tables)).catch(() => setTables([]));
-    api.leaderboard().then((r) => setBoard(r.rows)).catch(() => setBoard([]));
-  }, []);
+    if (flags.leaderboard) api.leaderboard().then((r) => setBoard(r.rows)).catch(() => setBoard([]));
+  }, [flags.leaderboard]);
 
   const join = async (e: FormEvent) => {
     e.preventDefault();
@@ -53,9 +53,13 @@ export function LobbyPage() {
       </header>
 
       <section className="grid gap-3 sm:grid-cols-2 mb-8 anim-fade-up">
-        <button className="btn btn-primary min-h-[64px] text-base" onClick={() => setCreate(true)}>
-          <Plus size={20} aria-hidden="true" /> Create a table
-        </button>
+        {flags.createTables ? (
+          <button className="btn btn-primary min-h-[64px] text-base" onClick={() => setCreate(true)}>
+            <Plus size={20} aria-hidden="true" /> Create a table
+          </button>
+        ) : (
+          <p className="card-surface p-4 text-sm text-muted min-h-[64px] flex items-center">Creating tables is paused right now. You can still join one with a code.</p>
+        )}
         <form onSubmit={join} className="flex gap-2">
           <input className="input uppercase tracking-[0.2em] font-bold" placeholder="CODE" value={code} aria-label="Table code"
             onChange={(e) => setCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8))} autoCapitalize="characters" autoCorrect="off" spellCheck={false} />
@@ -88,6 +92,7 @@ export function LobbyPage() {
         )}
       </section>
 
+      {flags.leaderboard && (
       <section>
         <h2 className="label flex items-center gap-1.5"><Trophy size={14} aria-hidden="true" /> Leaderboard</h2>
         {board === null ? (
@@ -121,16 +126,18 @@ export function LobbyPage() {
           </div>
         )}
       </section>
+      )}
 
-      <CreateSheet open={create} onClose={() => setCreate(false)} />
+      <CreateSheet open={create && flags.createTables} onClose={() => setCreate(false)} />
     </div>
   );
 }
 
-export function VariantPicker({ value, onChange }: { value: Variant; onChange: (v: Variant) => void }) {
+export function VariantPicker({ value, onChange, allowAll = true }: { value: Variant; onChange: (v: Variant) => void; allowAll?: boolean }) {
+  const ids = allowAll ? VARIANT_IDS : VARIANT_IDS.filter((id) => id === "nlhe");
   return (
     <div className="flex flex-wrap gap-2" role="group" aria-label="Game variant">
-      {VARIANT_IDS.map((id) => (
+      {ids.map((id) => (
         <button type="button" key={id} className="chip-toggle" aria-pressed={value === id} onClick={() => onChange(id)} title={VARIANTS[id].name}>
           {VARIANTS[id].short}
         </button>
@@ -140,9 +147,10 @@ export function VariantPicker({ value, onChange }: { value: Variant; onChange: (
 }
 
 function CreateSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const { user } = useAuth();
+  const { user, flags } = useAuth();
   const [name, setName] = useState("");
   const [cfg, setCfg] = useState<TableConfig>(defaultConfig());
+  useEffect(() => { if (!flags.variants && cfg.variant !== "nlhe") setCfg((c) => ({ ...c, variant: "nlhe" })); }, [flags.variants, cfg.variant]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const set = <K extends keyof TableConfig>(k: K, v: TableConfig[K]) => setCfg((c) => ({ ...c, [k]: v }));
@@ -169,7 +177,7 @@ function CreateSheet({ open, onClose }: { open: boolean; onClose: () => void }) 
         </Field>
         <div>
           <span className="label">Game</span>
-          <VariantPicker value={cfg.variant} onChange={(v) => set("variant", v)} />
+          <VariantPicker value={cfg.variant} onChange={(v) => set("variant", v)} allowAll={flags.variants} />
           <p className="text-xs text-dim mt-1.5">{VARIANTS[cfg.variant].name} · {VARIANTS[cfg.variant].holeCards} hole cards · {VARIANTS[cfg.variant].limit}</p>
         </div>
         <div className="grid grid-cols-3 gap-3">

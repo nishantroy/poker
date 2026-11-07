@@ -1,12 +1,16 @@
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, ShieldCheck } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { UserStats } from "@shared/protocol";
-import { api } from "../lib/api";
+import { api, ApiError } from "../lib/api";
+import { useAuth } from "../lib/auth";
+import { Toggle } from "../components/Panels";
+import { FLAG_DEFS, FLAG_NAMES, type FlagName } from "@shared/flags";
 import { Link } from "../lib/router";
 import { fmtNet, timeAgo } from "../lib/format";
 import { hudStats } from "@engine/hud";
 
 export function ProfilePage() {
+  const { isAdmin } = useAuth();
   const [stats, setStats] = useState<UserStats | null | undefined>(undefined);
   useEffect(() => {
     api.myStats().then((r) => setStats(r.stats)).catch(() => setStats(null));
@@ -36,6 +40,7 @@ export function ProfilePage() {
             <h2 className="label">Lifetime HUD</h2>
             <HudGrid hud={stats.hud} />
           </section>
+          {isAdmin && <FlagsPanel />}
           <section>
             <h2 className="label">Recent sessions</h2>
             {stats.recent.length === 0 ? (
@@ -57,6 +62,38 @@ export function ProfilePage() {
         </>
       )}
     </div>
+  );
+}
+
+/** Admin-only kill switches. Changes reach every open table within a second. */
+function FlagsPanel() {
+  const { flags, setFlags } = useAuth();
+  const [busy, setBusy] = useState<FlagName | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const flip = async (name: FlagName, enabled: boolean) => {
+    setBusy(name);
+    setErr(null);
+    try {
+      const r = await api.setFlag(name, enabled);
+      setFlags(r.flags);
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : "Could not update that flag");
+    } finally {
+      setBusy(null);
+    }
+  };
+  const off = FLAG_NAMES.filter((n) => !flags[n]).length;
+  return (
+    <section className="mb-8">
+      <h2 className="label flex items-center gap-1.5"><ShieldCheck size={14} aria-hidden="true" /> Feature flags {off > 0 && <span className="pill pill-red normal-case tracking-normal">{off} off</span>}</h2>
+      <p className="text-xs text-muted mb-2">Only admins see this. Switch a feature off if it misbehaves; every open table picks the change up immediately, no redeploy needed.</p>
+      <div className={`space-y-2 ${busy ? "opacity-70 pointer-events-none" : ""}`}>
+        {FLAG_NAMES.map((n) => (
+          <Toggle key={n} label={FLAG_DEFS[n].label} hint={FLAG_DEFS[n].hint} checked={flags[n]} onChange={(v) => void flip(n, v)} />
+        ))}
+      </div>
+      {err && <p className="text-sm text-[#ff8b8e] mt-2" role="alert">{err}</p>}
+    </section>
   );
 }
 

@@ -1,6 +1,7 @@
 import { Check, Crown, Send, UserX, X } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { ChatMessage, ClientMessage, HandRecordView, HandSummary, LogLine, SessionResultRow, TableConfig, TableView } from "@shared/protocol";
+import type { Flags } from "@shared/flags";
 import { HandsList, ReplayView } from "./Replay";
 import { VARIANTS } from "@engine/variants";
 import { fmtChips, fmtNet } from "../lib/format";
@@ -115,7 +116,7 @@ export function HostPanel({ open, onClose, view, send }: { open: boolean; onClos
 
         <section className="space-y-3">
           <h3 className="label">Game settings <span className="normal-case font-normal text-dim">(apply from the next hand)</span></h3>
-          <VariantPicker value={cfg.variant} onChange={(v) => set("variant", v)} />
+          <VariantPicker value={cfg.variant} onChange={(v) => set("variant", v)} allowAll={view.flags.variants} />
           <p className="text-xs text-dim">{VARIANTS[cfg.variant].name}</p>
           <div className="grid grid-cols-3 gap-2">
             <Field label="Small"><input className="input" type="number" inputMode="numeric" min={1} value={cfg.smallBlind} onChange={num("smallBlind")} /></Field>
@@ -131,8 +132,8 @@ export function HostPanel({ open, onClose, view, send }: { open: boolean; onClos
 
         <section className="space-y-2">
           <h3 className="label">Table options</h3>
-          <Toggle label="Rabbit hunting" hint="After an early finish, anyone seated can reveal the cards that would have come." checked={view.options.rabbitHunt} onChange={(v) => send({ t: "options", patch: { rabbitHunt: v } })} />
-          <Toggle label="Auto-reveal replays" hint="Show every hole card and equities in replays without a majority vote." checked={view.options.autoUnlockReplays} onChange={(v) => send({ t: "options", patch: { autoUnlockReplays: v } })} />
+          {view.flags.rabbitHunt && <Toggle label="Rabbit hunting" hint="After an early finish, anyone seated can reveal the cards that would have come." checked={view.options.rabbitHunt} onChange={(v) => send({ t: "options", patch: { rabbitHunt: v } })} />}
+          {view.flags.replays && <Toggle label="Auto-reveal replays" hint="Show every hole card and equities in replays without a majority vote." checked={view.options.autoUnlockReplays} onChange={(v) => send({ t: "options", patch: { autoUnlockReplays: v } })} />}
         </section>
 
         <section>
@@ -155,10 +156,12 @@ export function HostPanel({ open, onClose, view, send }: { open: boolean; onClos
 
 export type SideTab = "log" | "chat" | "hands";
 
-export function LogChat({ open, onClose, log, chat, send, tab, setTab, hands, records, mySeat }: {
+export function LogChat({ open, onClose, log, chat, send, tab, setTab, hands, records, mySeat, flags }: {
   open: boolean; onClose: () => void; log: LogLine[]; chat: ChatMessage[]; send: (m: ClientMessage) => void; tab: SideTab; setTab: (t: SideTab) => void;
-  hands: HandSummary[] | null; records: Record<number, HandRecordView>; mySeat: number | null;
+  hands: HandSummary[] | null; records: Record<number, HandRecordView>; mySeat: number | null; flags: Flags;
 }) {
+  const tabs = ((["log", "chat", "hands"] as const).filter((t) => t === "log" || (t === "chat" && flags.chat) || (t === "hands" && flags.replays)));
+  useEffect(() => { if (!tabs.includes(tab)) setTab("log"); }, [tabs, tab, setTab]);
   const [text, setText] = useState("");
   const [openHand, setOpenHand] = useState<number | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
@@ -183,14 +186,14 @@ export function LogChat({ open, onClose, log, chat, send, tab, setTab, hands, re
   return (
     <Sheet open={open} onClose={onClose} title={tab === "log" ? "Hand log" : tab === "chat" ? "Chat" : openHand !== null ? "Replay" : "Hands"} side="right">
       <div className="flex flex-col h-full min-h-[50dvh]">
-        <div className="grid grid-cols-3 gap-1 p-1 rounded-xl bg-surface-2 mb-3" role="tablist">
-          {(["log", "chat", "hands"] as const).map((t) => (
+        <div className="grid gap-1 p-1 rounded-xl bg-surface-2 mb-3" style={{ gridTemplateColumns: `repeat(${tabs.length}, minmax(0, 1fr))` }} role="tablist">
+          {tabs.map((t) => (
             <button key={t} role="tab" aria-selected={tab === t} onClick={() => { setTab(t); setOpenHand(null); }} className={`min-h-[40px] rounded-lg text-sm font-semibold ${tab === t ? "bg-surface-3" : "text-muted"}`}>{t === "log" ? "Log" : t === "chat" ? "Chat" : "Hands"}</button>
           ))}
         </div>
         {tab === "hands" ? (
           <div className="flex-1 overflow-y-auto scroll-thin pb-2 max-h-[70dvh]">
-            {openHand === null ? <HandsList hands={hands} onOpen={openReplay} send={send} /> : <ReplayView rec={records[openHand]} onBack={() => setOpenHand(null)} send={send} mySeat={mySeat} />}
+            {openHand === null ? <HandsList hands={hands} onOpen={openReplay} send={send} /> : <ReplayView rec={records[openHand]} onBack={() => setOpenHand(null)} send={send} mySeat={mySeat} equityOn={flags.equity} />}
           </div>
         ) : (
         <div className="flex-1 overflow-y-auto scroll-thin text-sm space-y-1 pb-2 max-h-[60dvh]">
@@ -238,7 +241,7 @@ export function EndedModal({ results, me }: { results: SessionResultRow[]; me: s
   );
 }
 
-function Toggle({ label, hint, checked, onChange }: { label: string; hint: string; checked: boolean; onChange: (v: boolean) => void }) {
+export function Toggle({ label, hint, checked, onChange }: { label: string; hint: string; checked: boolean; onChange: (v: boolean) => void }) {
   return (
     <button type="button" role="switch" aria-checked={checked} onClick={() => onChange(!checked)} className="w-full card-surface p-3 flex items-center gap-3 text-left">
       <div className="flex-1">

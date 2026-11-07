@@ -2,6 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import type { HudCounters, HudRow, LeaderboardRow, SessionResultRow, TableStatus, TableSummary, UserInfo, UserStats, Variant } from "@shared/protocol";
 import { emptyHud } from "@engine/hud";
 import { LIMITS } from "@shared/protocol";
+import { type FlagName, type Flags, FLAG_NAMES, defaultFlags } from "@shared/flags";
 import { type Env, SESSION_TTL_MS, hashPin, randomToken, timingSafeEqual } from "./env";
 
 const SCHEMA = `
@@ -70,6 +71,12 @@ CREATE TABLE IF NOT EXISTS table_members (
   code TEXT NOT NULL,
   user_id TEXT NOT NULL,
   PRIMARY KEY (code, user_id)
+);
+CREATE TABLE IF NOT EXISTS flags (
+  name TEXT PRIMARY KEY,
+  enabled INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  updated_by TEXT NOT NULL
 );
 `;
 
@@ -145,6 +152,50 @@ export class AccountsDO extends DurableObject<Env> {
 
   async logout(token: string): Promise<void> {
     this.sql.exec("DELETE FROM sessions WHERE token = ?", token);
+  }
+
+  /** Session lookup plus everything the client needs to boot: admin status and feature flags. */
+  async me(token: string | null): Promise<{ user: UserInfo | null; isAdmin: boolean; flags: Flags }> {
+    const user = token ? await this.session(token) : null;
+    return { user, isAdmin: user ? this.isAdmin(user) : false, flags: this.flags() };
+  }
+
+  // ---------- feature flags ----------
+
+  /** Admins: usernames listed in ADMIN_USERS, plus the first account ever created. */
+  isAdmin(user: UserInfo): boolean {
+    const listed = (this.env.ADMIN_USERS ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+    if (listed.includes(user.username.toLowerCase())) return true;
+    const first = this.sql.exec<{ id: string }>("SELECT id FROM users ORDER BY created_at ASC, rowid ASC LIMIT 1").toArray()[0];
+    return !!first && first.id === user.id;
+  }
+
+  flags(): Flags {
+    const out = defaultFlags();
+    for (const r of this.sql.exec<{ name: string; enabled: number }>("SELECT name, enabled FROM flags").toArray()) {
+      if ((FLAG_NAMES as string[]).includes(r.name)) out[r.name as FlagName] = r.enabled === 1;
+    }
+    return out;
+  }
+
+  /** Flip one flag and push the new set to every table that is still open. */
+  async setFlag(name: FlagName, enabled: boolean, byUserId: string): Promise<Flags> {
+    this.sql.exec(
+      "INSERT INTO flags (name, enabled, updated_at, updated_by) VALUES (?, ?, ?, ?) ON CONFLICT(name) DO UPDATE SET enabled = excluded.enabled, updated_at = excluded.updated_at, updated_by = excluded.updated_by",
+      name, enabled ? 1 : 0, Date.now(), byUserId,
+    );
+    const flags = this.flags();
+    const codes = this.sql.exec<{ code: string }>(
+      "SELECT code FROM tables WHERE status != 'ended' AND updated_at > ? ORDER BY updated_at DESC LIMIT 50", Date.now() - 3 * 24 * 60 * 60 * 1000,
+    ).toArray().map((r) => r.code);
+    await Promise.all(codes.map(async (code) => {
+      try {
+        await this.env.TABLE.get(this.env.TABLE.idFromName(code)).setFlags(flags);
+      } catch (e) {
+        console.error("flag push failed", code, e);
+      }
+    }));
+    return flags;
   }
 
   async session(token: string): Promise<UserInfo | null> {
