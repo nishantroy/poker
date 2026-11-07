@@ -41,12 +41,13 @@ export function LobbyPage() {
   return (
     <div className="min-h-full max-w-2xl mx-auto px-4 pb-10" style={{ paddingTop: "calc(var(--sat) + 16px)", paddingBottom: "calc(var(--sab) + 40px)" }}>
       <Toast message={toast} />
-      <header className="flex items-center justify-between mb-6">
-        <div className="flex items-center gap-2.5 min-w-0">
-          <Logo size={30} />
-          <h1 className="text-base font-semibold tracking-tight whitespace-nowrap truncate">{APP_NAME}</h1>
+      <header className="grid grid-cols-[1fr_auto_1fr] items-center mb-7">
+        <div />
+        <div className="flex flex-col items-center gap-2">
+          <Logo size={56} />
+          <h1 className="text-sm font-extrabold uppercase tracking-[0.18em] text-gradient-gold" style={{ fontFamily: "var(--font-display)" }}>{APP_NAME}</h1>
         </div>
-        <div className="flex items-center gap-1 shrink-0">
+        <div className="flex items-center gap-1 justify-self-end">
           <Link to="/profile" className="btn btn-ghost btn-sm" aria-label={`Profile: ${user?.username ?? ""}`}>
             <User size={18} aria-hidden="true" /> <span className="max-w-[8ch] truncate hidden sm:inline">{user?.username}</span>
           </Link>

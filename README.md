@@ -54,7 +54,7 @@ The first deploy creates the two Durable Object classes via the `v1` migration i
 
 ## Design
 
-Minimalism & Swiss direction from ui-ux-pro-max: near-black monochrome base, hairline borders, white primary actions, and one warm accent (amber) reserved for chips, stacks, pots, the clock and "your turn". Inter throughout (Google Fonts, `display=swap`). The mark is a monochrome four-notch chip with an amber centre (`Logo` in `src/client/pages/Login.tsx`, favicon inline in `index.html`). App name and tagline live in `src/shared/brand.ts`. No gradients, glows or neon.
+Miami Vice: deep navy night base, hot pink (`--color-brand`) and cyan (`--color-cyan`) neon, sunset orange on primary actions, teal felt. Sunset gold (`--color-gold`) is reserved for chips, stacks and pots. Display face is Outfit (uppercase, tracked wordmark), body is Inter, both from Google Fonts with `display=swap`. The mark is a cyan four-notch chip ring around a striped sunset sun (`Logo` in `src/client/pages/Login.tsx`, favicon inline in `index.html`), centered and large on the login and lobby. App name and tagline live in `src/shared/brand.ts`.
 
 ## Feature flags (kill switches)
 

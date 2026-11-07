@@ -231,7 +231,7 @@ export function TablePage({ code }: { code: string }) {
       {/* top bar */}
       <header className="flex items-center gap-2 px-3 py-2 shrink-0">
         <Link to="/" className="btn btn-ghost btn-sm -ml-2 px-2" aria-label="Lobby">
-          <span className="font-extrabold tracking-tight" style={{ fontFamily: "var(--font-display)" }}>{APP_MARK}</span>
+          <span className="font-extrabold tracking-wider text-gradient-gold" style={{ fontFamily: "var(--font-display)" }}>{APP_MARK}</span>
         </Link>
         <button className="flex items-center gap-2 min-w-0 flex-1 text-left" onClick={copyLink} aria-label={`Copy table link (code ${code})`}>
           <span className="pill pill-gold shrink-0 num">{variant.short} {view.config.smallBlind}/{view.config.bigBlind}</span>
