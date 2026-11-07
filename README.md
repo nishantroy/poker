@@ -1,4 +1,4 @@
-# Friends Poker
+# Bink City (Friends Poker)
 
 A hosted, mobile-friendly home-game poker app for 6–8 friends. Join a table by link, play in real time, keep lifetime stats. Runs entirely on the **Cloudflare Workers free plan**.
 

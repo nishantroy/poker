@@ -1,4 +1,4 @@
-# Friends Poker — agent notes
+# Bink City — agent notes
 
 See the root `/Users/nishantroy/code/AGENTS.md` for shared conventions (ports, worktrees).
 
