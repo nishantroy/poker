@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { advance, applyAction, canStartHand, computePots, getLimits, startHand, timeout, EngineError } from "@engine/index";
+import { advance, applyAction, canStartHand, computePots, forfeit, getLimits, startHand, timeout, EngineError } from "@engine/index";
 import { table, startRigged, act, stacks, awards, fixedRng } from "./helpers";
 
 describe("hand setup", () => {
@@ -331,5 +331,18 @@ describe("chip conservation", () => {
         expect(net).toBe(0);
       }
     }
+  });
+});
+
+describe("forfeit", () => {
+  it("folds a non-actor immediately and ends the hand when one player remains", () => {
+    let s = startRigged(table([1000, 1000, 1000]), 0).state;
+    s = act(s, 0, "raise", 30).state;
+    const r = forfeit(s, 2); // bb leaves while sb is to act
+    expect(r.state.hand!.players.find((p: { seat: number }) => p.seat === 2)!.folded).toBe(true);
+    expect(r.state.hand!.actor).toBe(1);
+    const r2 = forfeit(r.state, 1);
+    expect(r2.state.hand!.phase).toBe("showdown");
+    expect(stacks(r2.state)).toEqual([1015, 995, 990]);
   });
 });

@@ -363,6 +363,36 @@ export function advance(state: GameState): StepResult {
   return { state: s, events };
 }
 
+/** A player leaves (or is kicked) mid-hand: fold them immediately, whether or not it is their turn. */
+export function forfeit(state: GameState, seat: number): StepResult {
+  const s = structuredClone(state);
+  const hand = s.hand;
+  const events: GameEvent[] = [];
+  if (!hand || hand.phase === "showdown") return { state: s, events };
+  const p = hand.players.find((x) => x.seat === seat);
+  if (!p || p.folded) return { state: s, events };
+  if (hand.phase === "betting" && hand.actor === seat) {
+    return applyAction(state, seat, { type: "fold" });
+  }
+  p.folded = true;
+  p.acted = true;
+  events.push({ type: "action", seat, action: "fold", amount: 0, allIn: false });
+  hand.actionSeq += 1;
+  hand.pendingDiscard = hand.pendingDiscard.filter((x) => x !== seat);
+  if (nonFolded(hand).length === 1) {
+    hand.actor = null;
+    showdown(s, hand, events);
+  } else if (hand.phase === "discard" && hand.pendingDiscard.length === 0) {
+    afterDiscard(s, hand, events);
+  } else if (hand.phase === "betting" && roundSettled(hand)) {
+    hand.actor = null;
+    endOfStreet(s, hand, events);
+  } else if (hand.phase === "runout" && hand.street === "river") {
+    showdown(s, hand, events);
+  }
+  return { state: s, events };
+}
+
 // ---------- internals ----------
 
 function doDiscard(hand: Hand, p: HandPlayer, idx: number) {

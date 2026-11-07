@@ -4,6 +4,15 @@
   "main": "src/worker/index.ts",
   "compatibility_date": "2026-11-01",
   "compatibility_flags": ["nodejs_compat"],
+  "alias": {
+    "@shared/protocol": "./src/shared/protocol.ts",
+    "@engine/index": "./src/engine/index.ts",
+    "@engine/cards": "./src/engine/cards.ts",
+    "@engine/types": "./src/engine/types.ts",
+    "@engine/variants": "./src/engine/variants.ts",
+    "@engine/evaluate": "./src/engine/evaluate.ts",
+    "@engine/engine": "./src/engine/engine.ts"
+  },
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",
