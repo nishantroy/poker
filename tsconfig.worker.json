@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2022"],
+    "types": ["@cloudflare/workers-types"],
+    "composite": true
+  },
+  "include": ["src/worker", "src/engine", "src/shared", "test"]
+}
