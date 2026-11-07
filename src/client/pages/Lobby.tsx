@@ -1,4 +1,5 @@
-import { ArrowRight, Crown, LogOut, Plus, Trophy, User, Users } from "lucide-react";
+import { ArrowRight, Crown, LayoutGrid, LogOut, Plus, Trophy, User, Users } from "lucide-react";
+import { APP_NAME } from "@shared/brand";
 import { useEffect, useState, type FormEvent } from "react";
 import type { LeaderboardRow, TableConfig, TableSummary, Variant } from "@shared/protocol";
 import { defaultConfig } from "@shared/protocol";
@@ -41,13 +42,13 @@ export function LobbyPage() {
     <div className="min-h-full max-w-2xl mx-auto px-4 pb-10" style={{ paddingTop: "calc(var(--sat) + 16px)", paddingBottom: "calc(var(--sab) + 40px)" }}>
       <Toast message={toast} />
       <header className="flex items-center justify-between mb-6">
-        <div className="flex items-center gap-3">
-          <Logo size={36} />
-          <h1 className="text-xl font-extrabold tracking-tight" style={{ fontFamily: "var(--font-display)" }}>Friends Poker</h1>
+        <div className="flex items-center gap-2.5 min-w-0">
+          <Logo size={34} />
+          <h1 className="text-lg font-extrabold tracking-tight whitespace-nowrap truncate" style={{ fontFamily: "var(--font-display)" }}>{APP_NAME}</h1>
         </div>
-        <div className="flex items-center gap-1">
-          <Link to="/profile" className="btn btn-ghost btn-sm">
-            <User size={18} aria-hidden="true" /> <span className="max-w-[9ch] truncate">{user?.username}</span>
+        <div className="flex items-center gap-1 shrink-0">
+          <Link to="/profile" className="btn btn-ghost btn-sm" aria-label={`Profile: ${user?.username ?? ""}`}>
+            <User size={18} aria-hidden="true" /> <span className="max-w-[8ch] truncate hidden sm:inline">{user?.username}</span>
           </Link>
           <button className="btn btn-ghost btn-sm" onClick={logout} aria-label="Log out"><LogOut size={18} /></button>
         </div>
@@ -62,7 +63,7 @@ export function LobbyPage() {
           <p className="card-surface p-4 text-sm text-muted min-h-[64px] flex items-center">Creating tables is paused right now. You can still join one with a code.</p>
         )}
         <form onSubmit={join} className="flex gap-2">
-          <input className="input uppercase tracking-[0.2em] font-bold" placeholder="CODE" value={code} aria-label="Table code"
+          <input className="input uppercase tracking-[0.2em] font-bold" placeholder="JOIN CODE" value={code} aria-label="Table code"
             onChange={(e) => setCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8))} autoCapitalize="characters" autoCorrect="off" spellCheck={false} />
           <button className="btn btn-green px-5" disabled={code.length < 4} aria-label="Join table"><ArrowRight size={20} /></button>
         </form>
@@ -73,7 +74,13 @@ export function LobbyPage() {
         {tables === null ? (
           <div className="skeleton h-16 rounded-2xl" />
         ) : tables.length === 0 ? (
-          <p className="text-muted text-sm card-surface p-4">No open tables. Create one and share the link.</p>
+          <div className="card-surface p-5 flex items-center gap-4">
+            <span className="w-11 h-11 rounded-full bg-surface-2 border border-border flex items-center justify-center text-gold shrink-0"><LayoutGrid size={20} aria-hidden="true" /></span>
+            <div>
+              <p className="font-semibold text-sm">No open tables yet</p>
+              <p className="text-muted text-sm">Create one, then share the link or the 6-letter code. Tables disappear from here 3 days after the session ends.</p>
+            </div>
+          </div>
         ) : (
           <ul className="space-y-2">
             {tables.map((t) => (
@@ -99,7 +106,13 @@ export function LobbyPage() {
         {board === null ? (
           <div className="skeleton h-32 rounded-2xl" />
         ) : board.length === 0 ? (
-          <p className="text-muted text-sm card-surface p-4">No finished sessions yet. End a session as host to record results.</p>
+          <div className="card-surface p-5 flex items-center gap-4">
+            <span className="w-11 h-11 rounded-full bg-surface-2 border border-border flex items-center justify-center text-gold shrink-0"><Trophy size={20} aria-hidden="true" /></span>
+            <div>
+              <p className="font-semibold text-sm">Nobody on the board yet</p>
+              <p className="text-muted text-sm">When the host ends a session, everyone's net result lands here.</p>
+            </div>
+          </div>
         ) : (
           <div className="card-surface overflow-hidden">
             <table className="w-full text-sm">

@@ -1,4 +1,4 @@
-import { Check, Crown, Send, UserX, X } from "lucide-react";
+import { Ghost, Check, Crown, Send, UserX, X } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { ChatMessage, ClientMessage, HandRecordView, HandSummary, LogLine, SessionResultRow, TableConfig, TableView } from "@shared/protocol";
 import type { Flags } from "@shared/flags";
@@ -91,7 +91,7 @@ function GhostVote({ view, send }: { view: TableView; send: (m: ClientMessage) =
   return (
     <div className="card-surface p-3 space-y-2">
       <div className="flex items-start gap-2">
-        <span className="text-xl anim-ghost" aria-hidden="true">👻</span>
+        <span className="anim-ghost text-gold mt-0.5" aria-hidden="true"><Ghost size={22} /></span>
         <div className="flex-1">
           <p className="font-semibold text-sm">Ghost player {g.enabled ? <span className="pill pill-green ml-1">in play</span> : <span className="pill ml-1">off</span>}</p>
           <p className="text-xs text-muted">A ghost is dealt in every hand but never bets. It always sees showdown and can only win there. When it wins, its whole stack rides as dead money in the next main pot.</p>

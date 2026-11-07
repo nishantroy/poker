@@ -190,6 +190,17 @@ input, select, textarea { font: inherit; color: inherit; }
   50% { transform: translateY(-4px); }
 }
 
+.login-bg {
+  background:
+    radial-gradient(ellipse 80% 50% at 50% 0%, rgba(31, 107, 71, 0.35), transparent 70%),
+    radial-gradient(ellipse 60% 40% at 50% 100%, rgba(232, 176, 51, 0.10), transparent 70%),
+    var(--color-bg);
+}
+.logo-glow { filter: drop-shadow(0 0 24px rgba(232, 176, 51, 0.35)); animation: pop 420ms var(--ease-spring) both; }
+.text-gradient-gold {
+  background: linear-gradient(180deg, #ffe08a 0%, var(--color-gold) 55%, #c98f1f 100%);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
 .anim-pop { animation: pop 260ms var(--ease-spring) both; }
 .anim-shake { animation: shake 520ms var(--ease-out-quint) both; }
 .anim-badbeat { animation: badbeat-in 520ms var(--ease-spring) both; }

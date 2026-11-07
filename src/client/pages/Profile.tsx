@@ -34,7 +34,7 @@ export function ProfilePage() {
             <Stat label="Hands" value={stats.hands.toLocaleString()} />
             <Stat label="Best session" value={fmtNet(stats.bestSession)} tone="up" />
             <Stat label="Worst session" value={fmtNet(stats.worstSession)} tone="down" />
-            <Stat label="Biggest pot won" value={stats.biggestPot.toLocaleString()} />
+            <Stat label="Biggest pot won" value={stats.biggestPot.toLocaleString()} big />
           </section>
           <section className="mb-8">
             <h2 className="label">Lifetime HUD</h2>

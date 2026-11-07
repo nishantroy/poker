@@ -1,4 +1,5 @@
-import { BarChart3, Bell, BellOff, Link2, MessageSquare, Rabbit, ScrollText, Settings2, Smile, User } from "lucide-react";
+import { BarChart3, Bell, BellOff, Ghost, Link2, MessageSquare, Rabbit, ScrollText, Settings2, Smile, User } from "lucide-react";
+import { APP_MARK, APP_NAME } from "@shared/brand";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Action, PublicSeat, TableView } from "@shared/protocol";
 import { TAUNTS } from "@shared/protocol";
@@ -160,8 +161,8 @@ export function TablePage({ code }: { code: string }) {
 
   useEffect(() => { setSelectedCard(null); }, [view?.hand?.number, view?.hand?.phase]);
   useEffect(() => {
-    document.title = view ? `${view.name} · Friends Poker` : "Friends Poker";
-    return () => { document.title = "Friends Poker"; };
+    document.title = view ? `${view.name} · ${APP_NAME}` : APP_NAME;
+    return () => { document.title = APP_NAME; };
   }, [view?.name]);
 
   const act = useCallback((a: Action) => {
@@ -230,7 +231,7 @@ export function TablePage({ code }: { code: string }) {
       {/* top bar */}
       <header className="flex items-center gap-2 px-3 py-2 shrink-0">
         <Link to="/" className="btn btn-ghost btn-sm -ml-2 px-2" aria-label="Lobby">
-          <span className="font-extrabold tracking-tight" style={{ fontFamily: "var(--font-display)" }}>FP</span>
+          <span className="font-extrabold tracking-tight" style={{ fontFamily: "var(--font-display)" }}>{APP_MARK}</span>
         </Link>
         <button className="flex items-center gap-2 min-w-0 flex-1 text-left" onClick={copyLink} aria-label={`Copy table link (code ${code})`}>
           <span className="pill pill-gold shrink-0 num">{variant.short} {view.config.smallBlind}/{view.config.bigBlind}</span>
@@ -272,7 +273,7 @@ export function TablePage({ code }: { code: string }) {
                 <div className="flex items-center gap-2 flex-wrap justify-center">
                 {ghost && (
                   <div className={`flex items-center gap-1.5 rounded-lg px-2 py-0.5 border max-w-[200px] ${showdown && ghost.won > 0 ? "bg-gold text-on-gold border-transparent" : "bg-black/55 border-border"} anim-fade-up`} aria-label="Ghost player" title={showdown && ghost.handName ? `Ghost: ${ghost.handName}` : "Ghost player"}>
-                    <span className="text-base anim-ghost" aria-hidden="true">👻</span>
+                    <span className="anim-ghost text-muted" aria-hidden="true"><Ghost size={18} /></span>
                     <div className="flex -space-x-2">
                       {ghost.cards.map((c, i) => <PlayingCard key={`g${i}${c ?? "x"}`} card={c} size={landscape ? 26 : 20} deal best={showdown && !!c && !!ghost.bestCards?.includes(c)} />)}
                     </div>
@@ -288,7 +289,7 @@ export function TablePage({ code }: { code: string }) {
                   {hand.pots.length > 1 && hand.pots.map((p, i) => (
                     <span key={i} className="pill num">{i === 0 ? "main" : `side ${i}`} {fmtChips(p.amount)}</span>
                   ))}
-                  {ghost && ghost.stake > 0 && <span className="pill num">👻 {fmtChips(ghost.stake)}</span>}
+                  {ghost && ghost.stake > 0 && <span className="pill num inline-flex items-center gap-1"><Ghost size={11} aria-hidden="true" /> {fmtChips(ghost.stake)}</span>}
                 </div>
                 <div className={`flex flex-col ${boardCount > 1 ? "gap-1" : "gap-1.5"}`}>
                   {hand.boards.map((board, bi) => {
