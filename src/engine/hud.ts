@@ -48,9 +48,13 @@ export interface HandRecord {
   bigBlindSeat: number;
   blinds: { sb: number; bb: number; ante: number };
   players: HandRecordPlayer[];
-  board: Card[];
-  /** Board cards that would have followed had the hand gone to the river. */
-  rabbit: Card[];
+  boards: Card[][];
+  /** Squid Game: index of the eliminated board. */
+  eliminated: number | null;
+  /** Per board: cards that would have followed had the hand gone to the river. */
+  rabbit: Card[][];
+  /** The ghost player's hand, when one was dealt in. */
+  ghost: { hole: Card[]; discarded: Card[]; stake: number; won: number } | null;
   events: GameEvent[];
   result: HandResult | null;
   startedAt: number;

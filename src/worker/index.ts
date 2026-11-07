@@ -88,6 +88,7 @@ async function handleApi(req: Request, env: Env, path: string): Promise<Response
       const name = String(b.name ?? "").trim().slice(0, LIMITS.maxTableNameLen) || `${user.username}'s game`;
       const config = validateConfig(b.config);
       if (!flags.variants) config.variant = "nlhe";
+      if (!flags.squid) { config.boards = 1; config.squid = false; }
       let code = randomCode();
       // extremely unlikely collision guard
       for (let i = 0; i < 3; i++) {

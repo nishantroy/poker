@@ -1,15 +1,15 @@
 import { DurableObject } from "cloudflare:workers";
 import {
-  EngineError, VARIANTS, advance, applyAction, canStartHand, computePots, createGame, forfeit, getLimits, isHandLive,
-  participants, removePlayer, seatPlayer, startHand, timeout,
+  EngineError, GHOST_SEAT, VARIANTS, advance, applyAction, canStartHand, computePots, createGame, forfeit, getLimits, isHandLive,
+  participants, rabbitBoards, removePlayer, seatPlayer, setGhost, startHand, timeout,
   type GameEvent, type GameState, type TableConfig,
 } from "@engine/index";
 import { addHud, emptyHud, hudFromHand, type HandRecord, type HudCounters } from "@engine/hud";
 import type {
-  ChatMessage, ClientMessage, HandRecordView, HandSummary, LogLine, PublicSeat, RebuyRequest, ServerMessage, SessionResultRow, TableOptions,
+  ChatMessage, ClientMessage, HandRecordView, HandSummary, LogLine, PublicGhost, PublicSeat, RebuyRequest, ServerMessage, SessionResultRow, TableOptions,
   TableStatus, TableView, TimerInfo,
 } from "@shared/protocol";
-import { LIMITS, defaultOptions, validateConfig } from "@shared/protocol";
+import { LIMITS, TAUNTS, TAUNT_COOLDOWN_MS, defaultOptions, validateConfig } from "@shared/protocol";
 import { type Flags, defaultFlags, normalizeFlags } from "@shared/flags";
 import { accounts, type Env } from "./env";
 
@@ -54,6 +54,10 @@ interface Meta {
   rabbitShown: number | null;
   /** operator feature flags, pushed from AccountsDO and refreshed on every connection */
   flags: Flags;
+  /** vote in progress to turn the ghost player on/off: voter userIds */
+  ghostVote: { on: boolean; voters: string[] } | null;
+  /** last taunt per userId (cooldown) */
+  lastTaunt: Record<string, number>;
 }
 
 interface Attachment {
@@ -65,6 +69,7 @@ const RUNOUT_PAUSE_MS = 1400;
 const NEXT_HAND_DELAY_MS = 3500;
 const NEXT_HAND_DELAY_SHOWDOWN_MS = 6000;
 const DISCARD_TIMER_MS = 20_000;
+const BAD_BEAT_EXTRA_MS = 3000;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -101,10 +106,26 @@ export class TableDO extends DurableObject<Env> {
         this.meta = {
           ...m, options: { ...defaultOptions(), ...(m.options ?? {}) }, hud: m.hud ?? {}, cur: m.cur ?? null, unlocked: m.unlocked ?? [],
           votes: m.votes ?? {}, rabbitShown: m.rabbitShown ?? null, pendingConfig: m.pendingConfig ?? null, autoSatOut: m.autoSatOut ?? [],
-          flags: normalizeFlags(m.flags),
+          flags: normalizeFlags(m.flags), ghostVote: m.ghostVote ?? null, lastTaunt: m.lastTaunt ?? {},
         } as Meta;
       }
-      if (r.key === "game") this.game = JSON.parse(r.value) as GameState;
+      if (r.key === "game") {
+        const g = JSON.parse(r.value) as GameState & { hand: (GameState["hand"] & { board?: Card[] }) | null };
+        // forward-compatible defaults for states saved by earlier versions
+        g.config = validateConfig(g.config);
+        g.ghost ??= { enabled: false, stack: 0 };
+        if (g.hand) {
+          g.hand.boards ??= [g.hand.board ?? []];
+          g.hand.eliminated ??= null;
+          g.hand.ghost ??= null;
+          if (g.hand.result) {
+            g.hand.result.boardHands ??= [];
+            g.hand.result.ghost ??= null;
+            g.hand.result.badBeat ??= null;
+          }
+        }
+        this.game = g;
+      }
     }
   }
 
@@ -130,6 +151,7 @@ export class TableDO extends DurableObject<Env> {
       createdAt: Date.now(), timer: null, rebuyRequests: [], departed: [], logSeq: 0, chatSeq: 0, leaving: [],
       pendingConfig: null, autoSatOut: [], options: defaultOptions(), hud: {}, cur: null, unlocked: [], votes: {}, rabbitShown: null,
       flags: args.flags ? normalizeFlags(args.flags) : defaultFlags(),
+      ghostVote: null, lastTaunt: {},
     };
     this.game = createGame(validateConfig(args.config));
     this.log("system", `Table created by ${args.hostName}.`);
@@ -164,6 +186,14 @@ export class TableDO extends DurableObject<Env> {
       this.log("system", `Omaha and Pineapple are switched off for now; this table plays Hold'em${isHandLive(g) ? " from the next hand" : ""}.`);
       void accounts(this.env).updateTable(meta.code, { variant: "nlhe", smallBlind: cfg.smallBlind, bigBlind: cfg.bigBlind });
     }
+    const target2 = meta.pendingConfig ?? g.config;
+    if (!flags.squid && target2.boards > 1) {
+      const cfg = { ...target2, boards: 1, squid: false };
+      if (isHandLive(g)) meta.pendingConfig = cfg;
+      else g.config = cfg;
+      this.log("system", `Multi-board games are switched off for now; this table deals one board${isHandLive(g) ? " from the next hand" : ""}.`);
+    }
+    if (!flags.ghost && meta.ghostVote) meta.ghostVote = null;
     if (changed && announce) this.afterChange();
     else if (changed) this.save();
   }
@@ -427,7 +457,9 @@ export class TableDO extends DurableObject<Env> {
         const g = this.game!;
         const merged = validateConfig({ ...g.config, ...msg.patch, maxSeats: g.config.maxSeats });
         if (!meta.flags.variants && merged.variant !== "nlhe") throw new EngineError("disabled", "Omaha and Pineapple are switched off right now");
+        if (!meta.flags.squid && merged.boards > 1) throw new EngineError("disabled", "Multi-board games are switched off right now");
         const changes: string[] = [];
+        if (merged.boards !== g.config.boards || merged.squid !== g.config.squid) changes.push(merged.boards === 1 ? "one board" : `${merged.boards} boards${merged.squid ? " (Squid Game)" : ""}`);
         if (merged.variant !== g.config.variant) changes.push(`game → ${VARIANTS[merged.variant].name}`);
         if (merged.smallBlind !== g.config.smallBlind || merged.bigBlind !== g.config.bigBlind) changes.push(`blinds → ${merged.smallBlind}/${merged.bigBlind}`);
         if (merged.ante !== g.config.ante) changes.push(`ante → ${merged.ante}`);
@@ -465,12 +497,52 @@ export class TableDO extends DurableObject<Env> {
         if (!this.seatOf(att.userId)) throw new EngineError("not_seated", "Only seated players can rabbit hunt");
         requireFlag(meta.flags.rabbitHunt);
         if (!meta.options.rabbitHunt) throw new EngineError("rabbit_off", "Rabbit hunting is turned off");
-        if (!h || h.phase !== "showdown" || h.board.length >= 5) throw new EngineError("no_rabbit", "Nothing to rabbit hunt");
+        if (!h || h.phase !== "showdown" || h.boards[0]!.length >= 5) throw new EngineError("no_rabbit", "Nothing to rabbit hunt");
         if (meta.rabbitShown === h.number) return;
         meta.rabbitShown = h.number;
-        const cards = this.rabbitCards(h);
-        this.log("system", `${att.name} rabbit hunts: ${cards.join(" ")} would have come.`);
+        const cards = rabbitBoards(h);
+        this.log("system", `${att.name} rabbit hunts: ${cards.map((b) => b.join(" ")).join(" | ")} would have come.`);
         this.afterChange();
+        return;
+      }
+
+      case "ghostVote": {
+        requireFlag(meta.flags.ghost);
+        const g = this.game!;
+        const mine = this.seatOf(att.userId);
+        if (!mine) throw new EngineError("not_seated", "Only seated players can vote on the ghost");
+        const on = !!msg.on;
+        if (on === g.ghost.enabled) return;
+        if (!on && g.ghost.stack > 0) throw new EngineError("ghost_has_chips", "The ghost still has chips; beat it at showdown first");
+        const seated = g.seats.filter((s): s is NonNullable<typeof s> => !!s);
+        const needed = Math.floor(seated.length / 2) + 1;
+        if (!meta.ghostVote || meta.ghostVote.on !== on) meta.ghostVote = { on, voters: [] };
+        if (!meta.ghostVote.voters.includes(att.userId)) meta.ghostVote.voters.push(att.userId);
+        const count = meta.ghostVote.voters.filter((id) => seated.some((s) => s.playerId === id)).length;
+        if (count >= needed) {
+          this.game = setGhost(g, on);
+          meta.ghostVote = null;
+          this.log("system", on ? `👻 The ghost player joins${isHandLive(g) ? " from the next hand" : ""}. It never bets, always sees showdown, and only wins there.` : "The ghost player leaves the table.");
+        } else {
+          this.log("system", `${att.name} voted to turn the ghost ${on ? "on" : "off"} (${count}/${needed}).`);
+        }
+        this.afterChange();
+        return;
+      }
+
+      case "taunt": {
+        requireFlag(meta.flags.taunts);
+        const id = Number(msg.id);
+        if (!Number.isInteger(id) || id < 0 || id >= TAUNTS.length) throw new EngineError("bad_taunt", "Unknown taunt");
+        const now = Date.now();
+        const last = meta.lastTaunt[att.userId] ?? 0;
+        if (now - last < TAUNT_COOLDOWN_MS) throw new EngineError("taunt_cooldown", "Easy there — one taunt every few seconds");
+        meta.lastTaunt[att.userId] = now;
+        for (const k of Object.keys(meta.lastTaunt)) if (now - meta.lastTaunt[k]! > 60_000) delete meta.lastTaunt[k];
+        this.save();
+        const seat = this.seatOf(att.userId)?.seat ?? null;
+        const t = { userId: att.userId, name: att.name, seat, id, ts: now };
+        for (const s of this.ctx.getWebSockets()) this.send(s, { t: "taunt", taunt: t });
         return;
       }
 
@@ -543,7 +615,19 @@ export class TableDO extends DurableObject<Env> {
       this.syncTableStatus();
       return;
     }
-    const res = startHand(g);
+    let res;
+    try {
+      res = startHand(g, undefined, { allowGhost: meta.flags.ghost });
+    } catch (e) {
+      if (e instanceof EngineError && e.code === "deck_short") {
+        meta.status = "waiting";
+        this.log("system", `${e.message}. Someone needs to sit out, or the host can change the game.`);
+        this.afterChange();
+        this.syncTableStatus();
+        return;
+      }
+      throw e;
+    }
     this.applyStep(res.state, res.events);
   }
 
@@ -578,7 +662,8 @@ export class TableDO extends DurableObject<Env> {
         seat: p.seat, playerId: p.playerId, name: g.seats[p.seat]?.name ?? "?", hole: [...p.hole], discarded: [...p.discarded],
         startStack: meta.cur?.startStacks[p.seat] ?? 0, revealed: p.revealed && !p.folded, folded: p.folded,
       })),
-      board: [...h.board], rabbit: this.rabbitCards(h), events: meta.cur?.events ?? [], result: h.result,
+      boards: h.boards.map((b) => [...b]), eliminated: h.eliminated, rabbit: rabbitBoards(h), events: meta.cur?.events ?? [], result: h.result,
+      ghost: h.ghost ? { hole: [...h.ghost.hole], discarded: [...h.ghost.discarded], stake: h.ghost.stake, won: h.result?.ghost?.won ?? 0 } : null,
       startedAt: meta.cur?.startedAt ?? now, endedAt: now,
     };
     this.sql.exec("INSERT OR REPLACE INTO hand_records (number, record, ended_at) VALUES (?, ?, ?)", h.number, JSON.stringify(rec), now);
@@ -622,7 +707,7 @@ export class TableDO extends DurableObject<Env> {
       timer = { kind: "runout", at: now + RUNOUT_PAUSE_MS, durationMs: RUNOUT_PAUSE_MS };
     } else if ((!h || h.phase === "showdown") && meta.status === "running") {
       const contested = !!h?.result && Object.keys(h.result.hands).length > 0;
-      const d = contested ? NEXT_HAND_DELAY_SHOWDOWN_MS : NEXT_HAND_DELAY_MS;
+      const d = (contested ? NEXT_HAND_DELAY_SHOWDOWN_MS : NEXT_HAND_DELAY_MS) + (h?.result?.badBeat && meta.flags.badBeat ? BAD_BEAT_EXTRA_MS : 0);
       timer = { kind: "nextHand", at: now + d, durationMs: d };
     }
     // keep an existing timer of the same kind for the same action step (don't reset the clock on unrelated changes)
@@ -758,6 +843,7 @@ export class TableDO extends DurableObject<Env> {
       // settle the live hand by returning every player's chips (the hand is void)
       const h = g.hand!;
       for (const p of h.players) g.seats[p.seat]!.stack += p.totalBet;
+      if (h.ghost) g.ghost.stack += h.ghost.stake;
       h.phase = "showdown";
       h.actor = null;
       h.pendingDiscard = [];
@@ -848,34 +934,42 @@ export class TableDO extends DurableObject<Env> {
       try { limits = getLimits(g, mySeat.seat); } catch { limits = null; }
     }
 
+    let ghostView: PublicGhost | null = null;
+    if (h?.ghost) {
+      const gh = h.ghost;
+      const open = gh.revealed && showAll;
+      const best = h.result?.ghost ? Object.values(h.result.ghost.hands).sort((a, b) => b.score - a.score)[0] : undefined;
+      ghostView = { cards: open ? [...gh.hole] : gh.hole.map(() => null), stake: gh.stake, handName: open ? best?.name : undefined, bestCards: open ? best?.cards : undefined, won: h.result?.ghost?.won ?? 0 };
+    }
     const hand = h
       ? {
-          number: h.number, variant: h.variant, street: h.street, phase: h.phase, board: [...h.board], actor: h.actor,
+          number: h.number, variant: h.variant, street: h.street, phase: h.phase, boards: h.boards.map((b) => [...b]), eliminated: h.eliminated, ghost: ghostView, actor: h.actor,
           currentBet: h.currentBet, minRaise: h.minRaise, pot: h.players.reduce((a, p) => a + p.totalBet, 0),
           pots: computePots(h.players.map((p) => ({ ...p, totalBet: p.totalBet - p.streetBet }))),
-          pendingDiscard: [...h.pendingDiscard], result: h.result, actionSeq: h.actionSeq, button: h.button,
+          pendingDiscard: [...h.pendingDiscard], result: h.result && !meta.flags.badBeat ? { ...h.result, badBeat: null } : h.result, actionSeq: h.actionSeq, button: h.button,
           smallBlindSeat: h.smallBlindSeat, bigBlindSeat: h.bigBlindSeat,
-          rabbit: h.phase === "showdown" && meta.rabbitShown === h.number ? this.rabbitCards(h) : null,
-          rabbitAvailable: h.phase === "showdown" && h.board.length < 5 && meta.flags.rabbitHunt && meta.options.rabbitHunt && meta.rabbitShown !== h.number && !!mySeat,
+          rabbit: h.phase === "showdown" && meta.rabbitShown === h.number ? rabbitBoards(h) : null,
+          rabbitAvailable: h.phase === "showdown" && h.boards[0]!.length < 5 && meta.flags.rabbitHunt && meta.options.rabbitHunt && meta.rabbitShown !== h.number && !!mySeat,
         }
       : null;
 
     return {
       code: meta.code, name: meta.name, status: meta.status, hostId: meta.hostId, config: g.config, seats, button: g.button,
-      handCount: g.handCount, hand, timer: meta.timer, options: meta.options, hud: meta.flags.hud ? meta.hud : {}, flags: meta.flags, rebuyRequests: userId === meta.hostId ? meta.rebuyRequests : meta.rebuyRequests.filter((r) => r.playerId === userId),
+      handCount: g.handCount, hand, timer: meta.timer, options: meta.options, hud: meta.flags.hud ? meta.hud : {}, flags: meta.flags,
+      ghost: {
+        enabled: g.ghost.enabled, stack: g.ghost.stack,
+        vote: meta.ghostVote ? {
+          on: meta.ghostVote.on, votes: meta.ghostVote.voters.filter((id) => g.seats.some((s) => s?.playerId === id)).length,
+          needed: Math.floor(g.seats.filter(Boolean).length / 2) + 1, voted: meta.ghostVote.voters.includes(userId),
+        } : null,
+      },
+      rebuyRequests: userId === meta.hostId ? meta.rebuyRequests : meta.rebuyRequests.filter((r) => r.playerId === userId),
       me: { userId, seat: mySeat?.seat ?? null, limits, isHost: userId === meta.hostId },
       serverTime: Date.now(),
     };
   }
 
   // ---------- replays ----------
-
-  /** The board cards that would have been dealt next (the deck is dealt from the end). */
-  private rabbitCards(h: { board: Card[]; deck: Card[] }): Card[] {
-    const n = 5 - h.board.length;
-    if (n <= 0) return [];
-    return h.deck.slice(h.deck.length - n).reverse();
-  }
 
   private loadRecord(n: number): HandRecord | null {
     if (!Number.isInteger(n)) return null;
@@ -901,8 +995,8 @@ export class TableDO extends DurableObject<Env> {
       const rec = JSON.parse(r.record) as HandRecord;
       const pot = rec.players.reduce((a, p) => a + (rec.result ? -(rec.result.net[p.seat] ?? 0) : 0), 0);
       const totalPot = rec.result ? rec.result.pots.reduce((a, p) => a + p.amount, 0) : pot;
-      const winners = [...new Set((rec.result?.pots ?? []).flatMap((p) => p.winners.map((w) => rec.players.find((x) => x.seat === w.seat)?.name ?? "?")))];
-      return { number: rec.number, variant: rec.variant, pot: totalPot, winners, board: rec.board, endedAt: rec.endedAt, ...this.voteInfo(rec, userId) };
+      const winners = [...new Set((rec.result?.pots ?? []).flatMap((p) => p.winners.map((w) => w.seat === GHOST_SEAT ? "Ghost" : rec.players.find((x) => x.seat === w.seat)?.name ?? "?")))];
+      return { number: rec.number, variant: rec.variant, pot: totalPot, winners, boards: rec.boards ?? [], endedAt: rec.endedAt, ...this.voteInfo(rec, userId) };
     });
   }
 
@@ -939,7 +1033,8 @@ export class TableDO extends DurableObject<Env> {
   }
 
   private logEvents(prev: GameState, state: GameState, events: GameEvent[]) {
-    const name = (seat: number) => state.seats[seat]?.name ?? prev.seats[seat]?.name ?? `Seat ${seat + 1}`;
+    const name = (seat: number) => (seat === GHOST_SEAT ? "👻 Ghost" : state.seats[seat]?.name ?? prev.seats[seat]?.name ?? `Seat ${seat + 1}`);
+    const boardLabel = (b: number | undefined) => (b === undefined ? "" : ` on board ${b + 1}`);
     for (const e of events) {
       switch (e.type) {
         case "handStarted":
@@ -960,13 +1055,25 @@ export class TableDO extends DurableObject<Env> {
           this.log("system", `${name(e.seat)} timed out`);
           break;
         case "street":
-          this.log("street", `${e.street[0]!.toUpperCase() + e.street.slice(1)}: ${e.board.join(" ")}`);
+          this.log("street", `${e.street[0]!.toUpperCase() + e.street.slice(1)}: ${e.boards.map((b) => b.join(" ")).join("  |  ")}`);
+          break;
+        case "boardEliminated":
+          this.log("street", `🦑 Board ${e.board + 1} is eliminated (lowest river: ${e.river}).`);
+          break;
+        case "ghostDealt":
+          this.log("system", e.stake > 0 ? `👻 The ghost is dealt in with ${e.stake} dead money in the main pot.` : "👻 The ghost is dealt in.");
+          break;
+        case "ghostShown":
+          this.log("result", e.handName ? `👻 Ghost shows ${e.cards.join(" ")} — ${e.handName}${e.won ? ` and takes ${e.won}` : ""}` : `👻 Ghost had ${e.cards.join(" ")}`);
+          break;
+        case "badBeat":
+          this.log("result", `💔 BAD BEAT: ${name(e.victim)} was ${Math.round(e.equity)}% to win with one card to come.`);
           break;
         case "showdown":
           this.log("result", `${name(e.seat)} shows ${e.cards.join(" ")} — ${e.handName}`);
           break;
         case "potAwarded":
-          this.log("result", `${name(e.seat)} wins ${e.amount}${e.handName ? ` with ${e.handName}` : ""}`);
+          this.log("result", `${name(e.seat)} wins ${e.amount}${e.handName ? ` with ${e.handName}` : ""}${boardLabel(e.board)}`);
           break;
         case "returned":
           this.log("result", `${e.amount} returned to ${name(e.seat)}`);

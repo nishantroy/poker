@@ -14,5 +14,9 @@ See the root `/Users/nishantroy/code/AGENTS.md` for shared conventions (ports, w
 - New optional features get a flag in `src/shared/flags.ts` (default on), enforced server-side where the feature has a server half (`requireFlag` in `TableDO.handle`, `flags.*` checks in the Worker router) and hidden in the UI via `view.flags` (table) or `useAuth().flags` (elsewhere).
 - Path aliases (`@engine/*`, `@shared/*`) are declared in `tsconfig.base.json`, `vite.config.ts`, `vitest.config.ts` and `wrangler.jsonc` (`alias`). Add new engine modules to the wrangler alias list.
 
+## House games
+- Ghost player, multi-board/Squid Game and bad beats live in the engine (`src/engine/engine.ts`: `startHand` options, `dealNextStreet`, `squidLoser`, `showdown`, `detectBadBeat`). The ghost is `GHOST_SEAT = -1` in results/events and never occupies a table seat. `hand.boards` is always an array; board 0 is the only board for normal games.
+- Taunts and ghost votes are TableDO-only (`taunt`, `ghostVote` messages). Everything new is flag-gated; see `src/shared/flags.ts`.
+
 ## Validation
 - `npm run check` (types), `npm test` (engine), `npm run smoke` (needs `npm run dev` running).

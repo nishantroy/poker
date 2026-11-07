@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ChatMessage, ClientMessage, HandRecordView, HandSummary, LogLine, ServerMessage, SessionResultRow, TableView } from "@shared/protocol";
+import type { TauntMessage, ChatMessage, ClientMessage, HandRecordView, HandSummary, LogLine, ServerMessage, SessionResultRow, TableView } from "@shared/protocol";
 
 export type ConnStatus = "connecting" | "open" | "reconnecting" | "closed";
 
@@ -16,6 +16,7 @@ export interface TableConn {
   notFound: boolean;
   hands: HandSummary[] | null;
   records: Record<number, HandRecordView>;
+  taunts: (TauntMessage & { key: number })[];
 }
 
 const MAX_LOG = 300;
@@ -31,6 +32,8 @@ export function useTable(code: string): TableConn {
   const [notFound, setNotFound] = useState(false);
   const [hands, setHands] = useState<HandSummary[] | null>(null);
   const [records, setRecords] = useState<Record<number, HandRecordView>>({});
+  /** taunts shown right now; each expires on its own */
+  const [taunts, setTaunts] = useState<(TauntMessage & { key: number })[]>([]);
   const wsRef = useRef<WebSocket | null>(null);
   const attempts = useRef(0);
   const closedByUs = useRef(false);
@@ -99,6 +102,12 @@ export function useTable(code: string): TableConn {
           case "hand":
             setRecords((prev) => ({ ...prev, [m.hand.number]: m.hand }));
             break;
+          case "taunt": {
+            const key = m.taunt.ts + Math.random();
+            setTaunts((prev) => [...prev.filter((t) => t.userId !== m.taunt.userId), { ...m.taunt, key }]);
+            window.setTimeout(() => setTaunts((prev) => prev.filter((t) => t.key !== key)), 3800);
+            break;
+          }
           case "pong":
             setOffset(m.serverTime - Date.now());
             break;
@@ -153,5 +162,5 @@ export function useTable(code: string): TableConn {
     };
   }, [code]);
 
-  return { view, log, chat, status, error, ended, send, offset, notFound, hands, records };
+  return { view, log, chat, status, error, ended, send, offset, notFound, hands, records, taunts };
 }

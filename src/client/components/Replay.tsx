@@ -2,6 +2,7 @@ import { ArrowLeft, Lock, Rabbit, Unlock, Vote } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ClientMessage, HandRecordView, HandSummary } from "@shared/protocol";
 import { VARIANTS } from "@engine/variants";
+import { GHOST_SEAT } from "@engine/types";
 import { fmtChips, fmtNet, timeAgo } from "../lib/format";
 import { buildStages, equityRequest, streetLabel, type Stage } from "../lib/replay";
 import type { EquityResponse } from "../lib/equity.worker";
@@ -19,7 +20,7 @@ export function HandsList({ hands, onOpen, send }: { hands: HandSummary[] | null
             <span className="text-sm font-black num text-dim w-9">#{h.number}</span>
             <div className="flex-1 min-w-0">
               <p className="text-sm font-semibold truncate">{h.winners.join(", ") || "—"} <span className="text-muted font-normal">won</span> <span className="num text-gold-bright">{fmtChips(h.pot)}</span></p>
-              <p className="text-xs text-muted">{VARIANTS[h.variant].short} · {h.board.length ? h.board.join(" ") : "no flop"} · {timeAgo(h.endedAt)}</p>
+              <p className="text-xs text-muted">{VARIANTS[h.variant].short} · {h.boards[0]?.length ? h.boards.map((b) => b.join(" ")).join(" | ") : "no flop"} · {timeAgo(h.endedAt)}</p>
             </div>
             {h.unlocked ? <Unlock size={16} className="text-green-bright shrink-0" aria-label="Unlocked" /> : <Lock size={16} className="text-dim shrink-0" aria-label="Locked" />}
           </button>
@@ -66,7 +67,7 @@ export function ReplayView({ rec, onBack, send, mySeat, equityOn = true }: { rec
       </div>
     );
   }
-  const name = (seat: number) => rec.players.find((p) => p.seat === seat)?.name ?? `Seat ${seat + 1}`;
+  const name = (seat: number) => (seat === GHOST_SEAT ? "👻 Ghost" : rec.players.find((p) => p.seat === seat)?.name ?? `Seat ${seat + 1}`);
   const locked = !rec.unlocked;
 
   return (
@@ -115,11 +116,14 @@ export function ReplayView({ rec, onBack, send, mySeat, equityOn = true }: { rec
             </div>
           </>
         ) : <p className="text-sm text-muted">No result recorded.</p>}
-        {rec.rabbit.length > 0 && (
-          <div className="flex items-center gap-2 pt-1">
+        {rec.ghost && (
+          <p className="text-sm"><span className="text-muted">👻 Ghost</span> {rec.ghost.stake > 0 ? <span className="text-muted">staked {fmtChips(rec.ghost.stake)} · </span> : null}{rec.ghost.won > 0 ? <span className="text-gold-bright font-bold">took {fmtChips(rec.ghost.won)}</span> : <span className="text-muted">won nothing</span>}</p>
+        )}
+        {rec.rabbit.some((b) => b.length > 0) && (
+          <div className="flex items-center gap-2 pt-1 flex-wrap">
             <Rabbit size={16} className="text-muted" aria-hidden="true" />
             <span className="text-xs text-muted">Would have come:</span>
-            <div className="flex gap-1">{rec.rabbit.map((c) => <PlayingCard key={c} card={c} size={28} dim />)}</div>
+            {rec.rabbit.map((b, i) => <div key={i} className="flex gap-1">{b.map((c) => <PlayingCard key={c} card={c} size={28} dim />)}</div>)}
           </div>
         )}
       </section>
@@ -132,23 +136,28 @@ function StageBlock({ st, rec, eq, name, mySeat, locked, equityOn }: { st: Stage
   const best = eq ? Math.max(...eq.equity) : -1;
   return (
     <section className="card-surface p-3 space-y-2">
-      <div className="flex items-center gap-3">
-        <h4 className="text-xs uppercase tracking-wider text-dim font-semibold w-14">{streetLabel(st.street)}</h4>
-        <div className="flex gap-1">{st.board.map((c) => <PlayingCard key={c} card={c} size={30} />)}</div>
+      <div className="flex items-start gap-3">
+        <h4 className="text-xs uppercase tracking-wider text-dim font-semibold w-14 pt-1">{streetLabel(st.street)}</h4>
+        <div className="flex flex-col gap-1">
+          {st.boards.map((b, i) => (
+            <div key={i} className={`flex gap-1 ${st.eliminated === i ? "board-out rounded-md" : ""}`}>{b.map((c) => <PlayingCard key={c} card={c} size={30} />)}</div>
+          ))}
+        </div>
         {eq && !eq.exact && <span className="text-[10px] text-dim ml-auto">simulated</span>}
       </div>
       <ul className="space-y-1.5">
         {st.seats.map((seat) => {
-          const p = rec.players.find((x) => x.seat === seat)!;
+          const p = rec.players.find((x) => x.seat === seat);
+          const hole: (import("@shared/protocol").Card | null)[] = p ? p.hole : rec.ghost?.hole ?? [];
           const e = eqOf(seat);
           const folded = st.foldedHere.includes(seat);
           const acts = st.actions.filter((a) => a.seat === seat);
           return (
             <li key={seat} className={`flex items-center gap-2 ${folded ? "opacity-60" : ""}`}>
               <div className="flex -space-x-1.5 shrink-0">
-                {p.hole.map((c, i) => <PlayingCard key={i} card={c} size={24} />)}
+                {hole.map((c, i) => <PlayingCard key={i} card={c} size={24} />)}
               </div>
-              <span className={`text-sm font-semibold w-20 truncate shrink-0 ${seat === mySeat ? "text-blue" : ""}`}>{name(seat)}</span>
+              <span className={`text-sm font-semibold w-20 truncate shrink-0 ${seat === mySeat ? "text-blue" : seat === GHOST_SEAT ? "text-muted" : ""}`}>{name(seat)}</span>
               <div className="flex-1 min-w-0">
                 {locked || !equityOn ? (
                   <div className="h-2 rounded-full bg-surface-3" />

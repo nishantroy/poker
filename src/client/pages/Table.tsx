@@ -1,6 +1,9 @@
-import { BarChart3, Bell, BellOff, Link2, MessageSquare, Rabbit, ScrollText, Settings2, User } from "lucide-react";
+import { BarChart3, Bell, BellOff, Link2, MessageSquare, Rabbit, ScrollText, Settings2, Smile, User } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Action, PublicSeat, TableView } from "@shared/protocol";
+import { TAUNTS } from "@shared/protocol";
+import { GHOST_SEAT } from "@engine/types";
+import { playSfx, vibrate, type Sfx } from "../lib/sfx";
 import { VARIANTS } from "@engine/variants";
 import { useTable } from "../lib/socket";
 import { fmtChips } from "../lib/format";
@@ -8,7 +11,7 @@ import { Link } from "../lib/router";
 import { PlayingCard } from "../components/Card";
 import { BetChip, SeatView } from "../components/Seat";
 import { ActionBar, DiscardBar } from "../components/ActionBar";
-import { EndedModal, HostPanel, LogChat, PlayerMenu, SitSheet, type SideTab } from "../components/Panels";
+import { EndedModal, HostPanel, LogChat, PlayerMenu, SitSheet, TauntSheet, type SideTab } from "../components/Panels";
 import { HudStrip, PlayerSheet } from "../components/Hud";
 import { Toast } from "../components/ui";
 import { useAuth } from "../lib/auth";
@@ -40,37 +43,65 @@ function useMedia(q: string) {
   return m;
 }
 
-function useBeep() {
+function useSounds(enabled: boolean) {
   const [muted, setMuted] = useState(() => {
     try { return localStorage.getItem("fp:muted") === "1"; } catch { return false; }
   });
-  const ctxRef = useRef<AudioContext | null>(null);
-  const beep = useCallback(() => {
-    if (muted) return;
-    try {
-      ctxRef.current ??= new AudioContext();
-      const ctx = ctxRef.current;
-      if (ctx.state === "suspended") void ctx.resume();
-      const o = ctx.createOscillator();
-      const g = ctx.createGain();
-      o.type = "sine";
-      o.frequency.setValueAtTime(880, ctx.currentTime);
-      o.frequency.setValueAtTime(1175, ctx.currentTime + 0.09);
-      g.gain.setValueAtTime(0.0001, ctx.currentTime);
-      g.gain.exponentialRampToValueAtTime(0.18, ctx.currentTime + 0.02);
-      g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.25);
-      o.connect(g).connect(ctx.destination);
-      o.start();
-      o.stop(ctx.currentTime + 0.26);
-    } catch { /* no audio */ }
-    try { navigator.vibrate?.(40); } catch { /* ignore */ }
-  }, [muted]);
+  const play = useCallback((name: Sfx) => {
+    if (muted || !enabled) return;
+    playSfx(name);
+  }, [muted, enabled]);
   const toggle = () => setMuted((m) => { try { localStorage.setItem("fp:muted", m ? "0" : "1"); } catch { /* ignore */ } return !m; });
-  return { muted, beep, toggle };
+  return { muted, play, toggle };
+}
+
+/** Fire table sounds from state changes (bets, cards, wins, bad beats, Squid eliminations, ghost). */
+function useTableSounds(view: TableView | null, play: (s: Sfx) => void, tauntCount: number) {
+  const prev = useRef<TableView | null>(null);
+  const prevTaunts = useRef(0);
+  useEffect(() => {
+    const p = prev.current;
+    prev.current = view;
+    if (!view || !p) return;
+    const h = view.hand;
+    const ph = p.hand;
+    if (!h) return;
+    const sameHand = ph && ph.number === h.number;
+    if (!sameHand) {
+      if (h.ghost) play("ghost");
+      else play("card");
+      return;
+    }
+    const cardsNow = h.boards.reduce((a, b) => a + b.length, 0);
+    const cardsBefore = ph.boards.reduce((a, b) => a + b.length, 0);
+    if (h.eliminated !== null && ph.eliminated === null) play("eliminate");
+    else if (cardsNow > cardsBefore) play("card");
+    let chip = false;
+    let allin = false;
+    for (const s of view.seats) {
+      if (!s) continue;
+      const q = p.seats[s.seat];
+      if (!q) continue;
+      if (s.streetBet > q.streetBet) chip = true;
+      if (s.allIn && !q.allIn && s.inHand) allin = true;
+    }
+    if (allin) play("allin");
+    else if (chip) play("chip");
+    if (h.phase === "showdown" && ph.phase !== "showdown") {
+      if (h.result?.badBeat) {
+        play("badbeat");
+        vibrate(200);
+      } else if (h.result && Object.keys(h.result.hands).length > 0) play("win");
+    }
+  }, [view, play]);
+  useEffect(() => {
+    if (tauntCount > prevTaunts.current) play("taunt");
+    prevTaunts.current = tauntCount;
+  }, [tauntCount, play]);
 }
 
 export function TablePage({ code }: { code: string }) {
-  const { view, log, chat, status, error, ended, send, offset, notFound, hands, records } = useTable(code);
+  const { view, log, chat, status, error, ended, send, offset, notFound, hands, records, taunts } = useTable(code);
   const { flags: authFlags } = useAuth();
   const landscape = useMedia("(orientation: landscape) and (min-width: 640px)");
   const [sitSeat, setSitSeat] = useState<number | null>(null);
@@ -84,7 +115,10 @@ export function TablePage({ code }: { code: string }) {
   const [selectedCard, setSelectedCard] = useState<number | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
-  const { muted, beep, toggle } = useBeep();
+  const { muted, play, toggle } = useSounds(flags.sounds);
+  useTableSounds(view, play, taunts.length);
+  const [tauntOpen, setTauntOpen] = useState(false);
+  const [splash, setSplash] = useState<number | null>(null);
   const lastSeenChat = useRef(0);
   const [unreadChat, setUnreadChat] = useState(0);
 
@@ -110,9 +144,19 @@ export function TablePage({ code }: { code: string }) {
   useEffect(() => {
     if (turnKey && turnKey !== lastTurnKey.current) {
       lastTurnKey.current = turnKey;
-      if (flags.sounds) beep();
+      play("turn");
+      vibrate(40);
     }
-  }, [turnKey, beep, flags.sounds]);
+  }, [turnKey, play]);
+
+  // bad beat splash: show once per hand for a few seconds
+  const badBeatKey = view?.hand?.result?.badBeat && flags.badBeat ? view.hand.number : null;
+  useEffect(() => {
+    if (badBeatKey === null) return;
+    setSplash(badBeatKey);
+    const t = setTimeout(() => setSplash(null), 4200);
+    return () => clearTimeout(t);
+  }, [badBeatKey]);
 
   useEffect(() => { setSelectedCard(null); }, [view?.hand?.number, view?.hand?.phase]);
   useEffect(() => {
@@ -168,11 +212,16 @@ export function TablePage({ code }: { code: string }) {
   const amDiscarding = !!hand && hand.phase === "discard" && mySeat !== null && hand.pendingDiscard.includes(mySeat);
   const variant = VARIANTS[hand?.variant ?? view.config.variant];
   const feltWidth = landscape ? Math.min(window.innerWidth, 1100) * 0.82 : Math.min(window.innerWidth, 560) * 0.74;
-  const boardSize = Math.max(34, Math.min(64, Math.floor((feltWidth - 56) / 5 - 6)));
+  const boardCount = hand?.boards.length ?? 1;
+  // several boards stack vertically, so their cards shrink to keep the centre column clear of the side seats
+  const boardCap = landscape ? [64, 48, 40] : [64, 34, 28];
+  const boardSize = Math.max(boardCount > 1 ? 24 : 34, Math.min(boardCap[Math.min(boardCount, 3) - 1]!, Math.floor((feltWidth - 56) / 5 - 6)));
+  const ghost = hand?.ghost ?? null;
+  const badBeat = hand?.result?.badBeat ?? null;
+  const seatName = (seat: number) => (seat === GHOST_SEAT ? "Ghost" : view.seats[seat]?.name ?? "");
   const myCardSize = landscape ? 60 : variant.holeCards >= 5 ? 44 : variant.holeCards === 4 ? 50 : 60;
   const otherCardSize = landscape ? 30 : variant.holeCards >= 5 ? 20 : 26;
   const bottomWinner = showdown && winners.size > 0 ? [...winners.entries()].sort((a, b) => b[1] - a[1])[0] : null;
-  const bottomWinnerSeat = bottomWinner ? view.seats[bottomWinner[0]] : null;
 
   return (
     <div className="h-full flex flex-col overflow-hidden" style={{ paddingTop: "var(--sat)" }}>
@@ -221,22 +270,42 @@ export function TablePage({ code }: { code: string }) {
             {hand ? (
               <>
                 <div className="flex items-center gap-2 flex-wrap justify-center">
+                {ghost && (
+                  <div className={`flex items-center gap-1.5 rounded-lg px-2 py-0.5 border max-w-[200px] ${showdown && ghost.won > 0 ? "bg-gold text-on-gold border-transparent" : "bg-black/55 border-border"} anim-fade-up`} aria-label="Ghost player" title={showdown && ghost.handName ? `Ghost: ${ghost.handName}` : "Ghost player"}>
+                    <span className="text-base anim-ghost" aria-hidden="true">👻</span>
+                    <div className="flex -space-x-2">
+                      {ghost.cards.map((c, i) => <PlayingCard key={`g${i}${c ?? "x"}`} card={c} size={landscape ? 26 : 20} deal best={showdown && !!c && !!ghost.bestCards?.includes(c)} />)}
+                    </div>
+                    <div className="leading-tight min-w-0">
+                      <p className="text-[10px] font-bold truncate max-w-[110px]">{showdown && ghost.handName ? ghost.handName : "Ghost"}</p>
+                      <p className={`text-[10px] num font-extrabold ${showdown && ghost.won > 0 ? "" : "text-gold-bright"}`}>{showdown && ghost.won > 0 ? `+${fmtChips(ghost.won)}` : ghost.stake > 0 ? `${fmtChips(ghost.stake)} dead` : "no stake"}</p>
+                    </div>
+                  </div>
+                )}
                   <span className="pill text-[12px] normal-case tracking-normal bg-black/55 px-3 py-1">
                     <span className="text-muted">Pot</span> <span className="num text-gold-bright text-sm">{fmtChips(hand.pot)}</span>
                   </span>
                   {hand.pots.length > 1 && hand.pots.map((p, i) => (
                     <span key={i} className="pill num">{i === 0 ? "main" : `side ${i}`} {fmtChips(p.amount)}</span>
                   ))}
+                  {ghost && ghost.stake > 0 && <span className="pill num">👻 {fmtChips(ghost.stake)}</span>}
                 </div>
-                <div className="flex gap-1.5">
-                  {Array.from({ length: 5 }, (_, i) => {
-                    const c = hand.board[i];
-                    const r = hand.rabbit?.[i - hand.board.length];
-                    if (!c && r) return <div key={r} className="relative"><PlayingCard card={r} size={boardSize} deal dim /><span className="absolute -top-2 left-1/2 -translate-x-1/2 pill text-[9px] px-1.5 py-0"><Rabbit size={10} aria-hidden="true" /></span></div>;
-                    return c ? (
-                      <PlayingCard key={c} card={c} size={boardSize} deal best={showdown && bottomWinnerSeat?.bestCards?.includes(c)} dim={showdown && !!bottomWinnerSeat?.bestCards && !bottomWinnerSeat.bestCards.includes(c)} />
-                    ) : (
-                      <div key={i} className="rounded-md border border-white/15" style={{ width: boardSize, height: boardSize * 1.4 }} aria-hidden="true" />
+                <div className={`flex flex-col ${boardCount > 1 ? "gap-1" : "gap-1.5"}`}>
+                  {hand.boards.map((board, bi) => {
+                    const bestCards = showdown && bottomWinner ? hand.result?.pots.flatMap((p) => p.winners).find((w) => w.seat === bottomWinner[0] && (w.board ?? 0) === bi)?.cards : undefined;
+                    return (
+                      <div key={bi} className={`flex gap-1.5 ${hand.eliminated === bi ? "board-out rounded-md" : ""}`}>
+                        {Array.from({ length: 5 }, (_, i) => {
+                          const c = board[i];
+                          const r = hand.rabbit?.[bi]?.[i - board.length];
+                          if (!c && r) return <div key={r} className="relative"><PlayingCard card={r} size={boardSize} deal dim /><span className="absolute -top-2 left-1/2 -translate-x-1/2 pill text-[9px] px-1.5 py-0"><Rabbit size={10} aria-hidden="true" /></span></div>;
+                          return c ? (
+                            <PlayingCard key={c} card={c} size={boardSize} deal best={!!bestCards?.includes(c)} dim={!!bestCards && !bestCards.includes(c)} />
+                          ) : (
+                            <div key={i} className="rounded-md border border-white/15" style={{ width: boardSize, height: boardSize * 1.4 }} aria-hidden="true" />
+                          );
+                        })}
+                      </div>
                     );
                   })}
                 </div>
@@ -264,7 +333,7 @@ export function TablePage({ code }: { code: string }) {
         {Array.from({ length: n }, (_, seatNo) => {
           const p = pos[(seatNo - rot + n) % n]!;
           const seat = view.seats[seatNo];
-          const betPos = { x: 50 + (p.x - 50) * 0.58, y: 50 + (p.y - 50) * 0.56 };
+          const betPos = { x: 50 + (p.x - 50) * 0.64, y: 50 + (p.y - 50) * 0.6 };
           return (
             <div key={seatNo}>
               {seat ? (
@@ -307,11 +376,43 @@ export function TablePage({ code }: { code: string }) {
             </div>
           );
         })}
+
+        {/* taunt bubbles */}
+        {flags.taunts && taunts.map((t) => {
+          const p = t.seat !== null ? pos[(t.seat - rot + n) % n]! : { x: 50, y: 6 };
+          const tt = TAUNTS[t.id];
+          if (!tt) return null;
+          return (
+            <div key={t.key} className="absolute anim-bubble pointer-events-none" style={{ left: `${p.x}%`, top: `calc(${p.y}% - ${t.seat === mySeat ? 96 : 58}px)`, zIndex: 6, transform: "translate(-50%, 0)" }} role="status">
+              <div className="bg-white text-black rounded-2xl px-3 py-1.5 shadow-pop text-sm font-bold whitespace-nowrap flex items-center gap-1.5">
+                <span aria-hidden="true">{tt.emoji}</span>{tt.text}
+                {t.seat === null && <span className="text-[10px] text-black/60 font-semibold">· {t.name}</span>}
+              </div>
+              <div className="w-3 h-3 bg-white rotate-45 mx-auto -mt-1.5" aria-hidden="true" />
+            </div>
+          );
+        })}
+
+        {/* bad beat splash */}
+        {splash !== null && badBeat && (
+          <div className="absolute inset-0 z-20 flex items-center justify-center pointer-events-none anim-shake">
+            <div className="anim-badbeat text-center px-6 py-5 rounded-3xl bg-black/80 border-2 border-red shadow-pop backdrop-blur-sm max-w-[90%]">
+              <p className="text-[11px] uppercase tracking-[0.3em] text-[#ff8b8e] font-black">💔 Bad beat</p>
+              <p className="text-3xl font-black leading-tight mt-1" style={{ fontFamily: "var(--font-display)" }}>{badBeat.victim === mySeat ? "You got rivered" : `${seatName(badBeat.victim)} got rivered`}</p>
+              <p className="text-sm text-muted mt-2"><span className="num font-bold text-text">{Math.round(badBeat.equity)}%</span> to win with one card to come</p>
+              <p className="text-xs text-dim mt-1">{badBeat.victimHand} <span className="text-[#ff8b8e]">lost to</span> {badBeat.winnerHand} <span className="text-muted">({seatName(badBeat.winner)})</span></p>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* bottom bar */}
       <div className="shrink-0 px-3 pt-2 relative" style={{ paddingBottom: "calc(var(--sab) + 10px)" }}>
-        <div className="max-w-xl mx-auto relative">
+        <div className="max-w-xl mx-auto relative flex items-stretch gap-2">
+          {flags.taunts && !(myTurn && view.me.limits) && !amDiscarding && (
+            <button className="btn btn-sm px-3 shrink-0" onClick={() => setTauntOpen(true)} aria-label="Send a taunt"><Smile size={18} /></button>
+          )}
+          <div className="flex-1 min-w-0">
           {myTurn && view.me.limits ? (
             <ActionBar view={view} onAction={act} />
           ) : amDiscarding ? (
@@ -319,8 +420,10 @@ export function TablePage({ code }: { code: string }) {
           ) : (
             <StatusBar view={view} onSit={() => setSitSeat(firstEmpty(view.seats))} onStart={() => send({ t: "start" })} onRabbit={() => send({ t: "rabbit" })} />
           )}
+          </div>
         </div>
       </div>
+      <TauntSheet open={tauntOpen} onClose={() => setTauntOpen(false)} onPick={(id) => send({ t: "taunt", id })} />
 
       <SitSheet open={sitSeat !== null} seat={sitSeat} config={view.config} onClose={() => setSitSeat(null)} onSit={(seat, buyIn) => { send({ t: "sit", seat, buyIn }); setSitSeat(null); }} />
       <HostPanel open={panel === "host"} onClose={() => setPanel(null)} view={view} send={send} />
@@ -344,8 +447,9 @@ function CenterStatus({ view, landscape }: { view: TableView; landscape: boolean
   if (hand.phase === "showdown" && hand.result) {
     const best = hand.result.pots.flatMap((p) => p.winners).sort((a, b) => b.amount - a.amount)[0];
     if (best) {
-      const name = view.seats[best.seat]?.name ?? "";
-      text = `${name} wins ${fmtChips(best.amount)}${best.handName ? ` · ${best.handName}` : ""}`;
+      const name = best.seat === GHOST_SEAT ? "👻 Ghost" : view.seats[best.seat]?.name ?? "";
+      const totalWon = hand.result.pots.flatMap((p) => p.winners).filter((w) => w.seat === best.seat).reduce((a, w) => a + w.amount, 0);
+      text = `${name} wins ${fmtChips(totalWon)}${best.handName ? ` · ${best.handName}` : ""}`;
       tone = "text-gold-bright";
     }
   } else if (hand.phase === "discard") {

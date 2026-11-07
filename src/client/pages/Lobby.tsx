@@ -8,6 +8,7 @@ import { useAuth } from "../lib/auth";
 import { Link, navigate } from "../lib/router";
 import { fmtNet, timeAgo } from "../lib/format";
 import { Field, Sheet, Toast } from "../components/ui";
+import { BoardsPicker } from "../components/Panels";
 import { Logo } from "./Login";
 
 export function LobbyPage() {
@@ -190,6 +191,7 @@ function CreateSheet({ open, onClose }: { open: boolean; onClose: () => void }) 
           <Field label="Seats"><input className="input" type="number" inputMode="numeric" min={2} max={8} value={cfg.maxSeats} onChange={num("maxSeats")} /></Field>
           <Field label="Timer (s)"><input className="input" type="number" inputMode="numeric" min={5} max={300} value={Math.round(cfg.actionTimerMs / 1000)} onChange={(e) => set("actionTimerMs", Number(e.target.value) * 1000)} /></Field>
         </div>
+        {flags.squid && <BoardsPicker boards={cfg.boards} squid={cfg.squid} onChange={(b, sq) => setCfg((c) => ({ ...c, boards: b, squid: sq }))} />}
         {err && <p className="text-sm text-[#ff8b8e]" role="alert">{err}</p>}
         <button className="btn btn-primary w-full" disabled={busy}>{busy ? "Creating…" : "Create & open table"}</button>
       </form>

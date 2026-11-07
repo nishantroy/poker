@@ -2,6 +2,7 @@ import { Check, Crown, Send, UserX, X } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { ChatMessage, ClientMessage, HandRecordView, HandSummary, LogLine, SessionResultRow, TableConfig, TableView } from "@shared/protocol";
 import type { Flags } from "@shared/flags";
+import { TAUNTS } from "@shared/protocol";
 import { HandsList, ReplayView } from "./Replay";
 import { VARIANTS } from "@engine/variants";
 import { fmtChips, fmtNet } from "../lib/format";
@@ -69,6 +70,7 @@ export function PlayerMenu({ open, onClose, view, send }: { open: boolean; onClo
                 </div>
               )}
             </div>
+            {view.flags.ghost && <GhostVote view={view} send={send} />}
             <button className="btn btn-danger w-full" onClick={() => { if (confirm("Stand up and leave your seat? Your chips are cashed out.")) act({ t: "stand" }); }}>Stand up</button>
           </>
         ) : (
@@ -77,6 +79,53 @@ export function PlayerMenu({ open, onClose, view, send }: { open: boolean; onClo
         <button className="btn btn-ghost w-full" onClick={() => navigate("/")}>Back to lobby</button>
       </div>
     </Sheet>
+  );
+}
+
+/** Vote to bring the ghost in or send it away. Majority of seated players. */
+function GhostVote({ view, send }: { view: TableView; send: (m: ClientMessage) => void }) {
+  const g = view.ghost;
+  const want = !g.enabled;
+  const vote = g.vote && g.vote.on === want ? g.vote : null;
+  const blocked = !want && g.stack > 0;
+  return (
+    <div className="card-surface p-3 space-y-2">
+      <div className="flex items-start gap-2">
+        <span className="text-xl anim-ghost" aria-hidden="true">👻</span>
+        <div className="flex-1">
+          <p className="font-semibold text-sm">Ghost player {g.enabled ? <span className="pill pill-green ml-1">in play</span> : <span className="pill ml-1">off</span>}</p>
+          <p className="text-xs text-muted">A ghost is dealt in every hand but never bets. It always sees showdown and can only win there. When it wins, its whole stack rides as dead money in the next main pot.</p>
+          {g.enabled && <p className="text-xs mt-1">Ghost stack: <span className="num font-bold text-gold-bright">{g.stack.toLocaleString()}</span></p>}
+        </div>
+      </div>
+      {blocked ? (
+        <p className="text-xs text-dim">The ghost can only be sent away once someone takes its chips at showdown.</p>
+      ) : (
+        <button className={`btn w-full ${want ? "btn-primary" : ""}`} disabled={!!vote?.voted} onClick={() => send({ t: "ghostVote", on: want })}>
+          {vote?.voted ? `Voted · ${vote.votes}/${vote.needed}` : want ? `Vote to summon the ghost${vote ? ` (${vote.votes}/${vote.needed})` : ""}` : `Vote to banish the ghost${vote ? ` (${vote.votes}/${vote.needed})` : ""}`}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** 1 / 2 / 3 boards plus the Squid Game elimination toggle. */
+export function BoardsPicker({ boards, squid, onChange }: { boards: number; squid: boolean; onChange: (boards: number, squid: boolean) => void }) {
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-2">
+        <span className="label mb-0">Boards</span>
+        <div className="flex gap-1.5" role="group" aria-label="Number of boards">
+          {[1, 2, 3].map((n) => (
+            <button type="button" key={n} className="chip-toggle min-w-[44px]" aria-pressed={boards === n} onClick={() => onChange(n, n > 1 && squid)}>{n}</button>
+          ))}
+        </div>
+      </div>
+      {boards > 1 && (
+        <Toggle label="Squid Game 🦑" hint="When the river comes, the board with the lowest river card is eliminated before river betting. Ties: turn, then flop cards from last to first." checked={squid} onChange={(v) => onChange(boards, v)} />
+      )}
+      {boards > 1 && !squid && <p className="text-xs text-dim">Without Squid Game every pot is split equally between the boards.</p>}
+    </div>
   );
 }
 
@@ -127,6 +176,7 @@ export function HostPanel({ open, onClose, view, send }: { open: boolean; onClos
             <Field label="Max buy-in"><input className="input" type="number" inputMode="numeric" min={1} value={cfg.startingStack} onChange={num("startingStack")} /></Field>
             <Field label="Timer (s)"><input className="input" type="number" inputMode="numeric" min={5} max={300} value={Math.round(cfg.actionTimerMs / 1000)} onChange={(e) => set("actionTimerMs", Number(e.target.value) * 1000)} /></Field>
           </div>
+          {view.flags.squid && <BoardsPicker boards={cfg.boards} squid={cfg.squid} onChange={(b, sq) => setCfg((c) => ({ ...c, boards: b, squid: sq }))} />}
           <button className="btn btn-primary w-full" disabled={!dirty} onClick={() => send({ t: "config", patch: cfg })}>Apply settings</button>
         </section>
 
@@ -214,6 +264,22 @@ export function LogChat({ open, onClose, log, chat, send, tab, setTab, hands, re
           </form>
         )}
       </div>
+    </Sheet>
+  );
+}
+
+export function TauntSheet({ open, onClose, onPick }: { open: boolean; onClose: () => void; onPick: (id: number) => void }) {
+  return (
+    <Sheet open={open} onClose={onClose} title="Taunt">
+      <div className="grid grid-cols-3 gap-2">
+        {TAUNTS.map((t, i) => (
+          <button key={i} className="card-surface p-3 flex flex-col items-center gap-1 hover:bg-surface-2 active:scale-95 transition-transform" onClick={() => { onPick(i); onClose(); }}>
+            <span className="text-2xl" aria-hidden="true">{t.emoji}</span>
+            <span className="text-xs font-semibold text-center leading-tight">{t.text}</span>
+          </button>
+        ))}
+      </div>
+      <p className="text-xs text-dim mt-3">Everyone at the table sees it for a few seconds. One every few seconds, be nice-ish.</p>
     </Sheet>
   );
 }

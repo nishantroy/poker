@@ -16,7 +16,11 @@ export const FLAG_DEFS = {
   leaderboard: { label: "Leaderboard", hint: "The lobby leaderboard and lifetime results API.", server: true },
   signup: { label: "New signups", hint: "Off: only existing accounts can log in.", server: true },
   createTables: { label: "Creating tables", hint: "Off: nobody can open a new table. Running tables are unaffected.", server: true },
-  sounds: { label: "Turn sounds", hint: "The turn chime and vibration on phones.", server: false },
+  sounds: { label: "Sounds", hint: "Turn chime, chips, cards, wins and vibration on phones.", server: false },
+  ghost: { label: "Ghost player", hint: "The vote-in ghost seat. Off: no ghost is dealt (its chips stay safe until it is back on).", server: true },
+  squid: { label: "Multi-board & Squid Game", hint: "Two or three boards per hand with Squid elimination. Off: tables go back to one board from the next hand.", server: true },
+  badBeat: { label: "Bad beat splash", hint: "Full-screen moment when a big favourite gets rivered.", server: true },
+  taunts: { label: "Taunts", hint: "Quick canned taunts shown as speech bubbles at the table.", server: true },
 } as const;
 
 export type FlagName = keyof typeof FLAG_DEFS;

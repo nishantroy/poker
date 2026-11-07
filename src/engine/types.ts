@@ -26,6 +26,28 @@ export interface TableConfig {
   startingStack: number;
   maxSeats: number;
   actionTimerMs: number;
+  /** Number of boards dealt (1–3). More than one splits every pot equally between boards. */
+  boards: number;
+  /** Squid Game: with several boards, the board with the lowest river card is eliminated before river betting. */
+  squid: boolean;
+}
+
+/** Seat number used for the ghost in results and events. The ghost never occupies a table seat. */
+export const GHOST_SEAT = -1;
+
+export interface GhostState {
+  /** Dealt into every hand from the next one. */
+  enabled: boolean;
+  /** Chips the ghost has won; they ride as dead money in the next hand's main pot. */
+  stack: number;
+}
+
+export interface HandGhost {
+  hole: Card[];
+  discarded: Card[];
+  /** Dead money this hand (the ghost's stack at the deal). */
+  stake: number;
+  revealed: boolean;
 }
 
 export type Street = "preflop" | "flop" | "turn" | "river";
@@ -59,24 +81,47 @@ export interface Pot {
   eligible: number[]; // seat numbers
 }
 
+export interface BoardHand {
+  name: string;
+  score: number;
+  cards: Card[];
+}
+
 export interface PotResult {
   amount: number;
-  winners: { seat: number; amount: number; handName?: string; cards?: Card[] }[];
+  /** `seat` may be GHOST_SEAT. `board` is set when several boards split the pot. */
+  winners: { seat: number; amount: number; handName?: string; cards?: Card[]; board?: number }[];
+}
+
+export interface BadBeat {
+  victim: number;
+  winner: number;
+  /** Victim's equity (percent) with one card to come. */
+  equity: number;
+  victimHand: string;
+  winnerHand: string;
 }
 
 export interface HandResult {
   pots: PotResult[];
-  /** Per seat: hand description when shown. */
-  hands: Record<number, { name: string; score: number; cards: Card[] }>;
+  /** Per seat: headline hand (best across surviving boards) when shown at showdown. */
+  hands: Record<number, BoardHand>;
+  /** Per board index: hand per seat. Empty object for an eliminated board. */
+  boardHands: Record<number, BoardHand>[];
   /** Net chip change per seat for this hand. */
   net: Record<number, number>;
+  ghost: { won: number; hands: Record<number, BoardHand> } | null;
+  badBeat: BadBeat | null;
 }
 
 export interface Hand {
   number: number;
   variant: Variant;
   deck: Card[];
-  board: Card[];
+  boards: Card[][];
+  /** Index of the board knocked out by Squid Game, once the river is dealt. */
+  eliminated: number | null;
+  ghost: HandGhost | null;
   players: HandPlayer[];
   button: number;
   smallBlindSeat: number;
@@ -100,6 +145,7 @@ export interface GameState {
   button: number;
   handCount: number;
   hand: Hand | null;
+  ghost: GhostState;
 }
 
 export type ActionType = "fold" | "check" | "call" | "bet" | "raise" | "allin" | "discard";
@@ -115,9 +161,13 @@ export type GameEvent =
   | { type: "blind"; seat: number; kind: "sb" | "bb" | "ante"; amount: number }
   | { type: "action"; seat: number; action: ActionType; amount: number; allIn: boolean }
   | { type: "discarded"; seat: number }
-  | { type: "street"; street: Street; board: Card[] }
+  | { type: "street"; street: Street; boards: Card[][] }
+  | { type: "boardEliminated"; board: number; river: Card }
+  | { type: "ghostDealt"; stake: number }
+  | { type: "ghostShown"; cards: Card[]; handName: string | null; won: number }
   | { type: "showdown"; seat: number; cards: Card[]; handName: string }
-  | { type: "potAwarded"; seat: number; amount: number; handName?: string; potIndex: number }
+  | { type: "potAwarded"; seat: number; amount: number; handName?: string; potIndex: number; board?: number }
+  | { type: "badBeat"; victim: number; winner: number; equity: number }
   | { type: "returned"; seat: number; amount: number }
   | { type: "handEnded"; handNumber: number }
   | { type: "timeout"; seat: number };

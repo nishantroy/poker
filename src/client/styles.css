@@ -166,8 +166,37 @@ input, select, textarea { font: inherit; color: inherit; }
   to { transform: translateY(0); }
 }
 @keyframes shimmer { to { background-position: 200% 0; } }
+@keyframes shake {
+  0%, 100% { transform: translate3d(0, 0, 0); }
+  10%, 50%, 90% { transform: translate3d(-6px, 2px, 0); }
+  30%, 70% { transform: translate3d(6px, -2px, 0); }
+}
+@keyframes badbeat-in {
+  0% { opacity: 0; transform: scale(0.6) rotate(-6deg); }
+  60% { opacity: 1; transform: scale(1.08) rotate(2deg); }
+  100% { opacity: 1; transform: scale(1) rotate(0); }
+}
+@keyframes bubble-in {
+  0% { opacity: 0; transform: translate(-50%, 8px) scale(0.7); }
+  70% { opacity: 1; transform: translate(-50%, -4px) scale(1.05); }
+  100% { opacity: 1; transform: translate(-50%, 0) scale(1); }
+}
+@keyframes float-away {
+  0% { opacity: 1; transform: translateY(0); }
+  100% { opacity: 0; transform: translateY(-40px); }
+}
+@keyframes ghost-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+}
 
 .anim-pop { animation: pop 260ms var(--ease-spring) both; }
+.anim-shake { animation: shake 520ms var(--ease-out-quint) both; }
+.anim-badbeat { animation: badbeat-in 520ms var(--ease-spring) both; }
+.anim-bubble { animation: bubble-in 320ms var(--ease-spring) both; }
+.anim-ghost { animation: ghost-float 2.6s ease-in-out infinite; }
+.board-out { position: relative; filter: saturate(0.2) brightness(0.6); }
+.board-out::after { content: "OUT"; position: absolute; inset: 0; display: grid; place-items: center; font-weight: 900; letter-spacing: 0.2em; color: #ff8b8e; font-size: 14px; text-shadow: 0 2px 8px rgba(0,0,0,.8); }
 .anim-fade-up { animation: fade-up 220ms var(--ease-out-quint) both; }
 .anim-slide-up { animation: slide-up 260ms var(--ease-out-quint) both; }
 .winner-glow { animation: pulse-gold 1.1s ease-in-out infinite; }

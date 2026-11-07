@@ -1,10 +1,10 @@
 import type { Card } from "@engine/cards";
 import type { Variant } from "@engine/variants";
-import type { Action, ActionLimits, HandResult, Phase, Street, TableConfig } from "@engine/types";
+import type { Action, ActionLimits, BadBeat, BoardHand, HandResult, Phase, Street, TableConfig } from "@engine/types";
 import type { HandRecord, HudCounters } from "@engine/hud";
 import type { Flags } from "./flags";
 
-export type { Card, Variant, Action, ActionLimits, HandResult, Phase, Street, TableConfig, HandRecord, HudCounters, Flags };
+export type { Card, Variant, Action, ActionLimits, BadBeat, BoardHand, HandResult, Phase, Street, TableConfig, HandRecord, HudCounters, Flags };
 
 /** Table-level options that the engine does not care about. */
 export interface TableOptions {
@@ -21,7 +21,7 @@ export interface HandSummary {
   variant: Variant;
   pot: number;
   winners: string[];
-  board: Card[];
+  boards: Card[][];
   endedAt: number;
   /** Everyone's cards and equities may be shown. */
   unlocked: boolean;
@@ -85,7 +85,11 @@ export interface PublicHand {
   variant: Variant;
   street: Street;
   phase: Phase;
-  board: Card[];
+  boards: Card[][];
+  /** Squid Game: board knocked out at the river. */
+  eliminated: number | null;
+  /** The ghost player's hand this round, when one was dealt in. */
+  ghost: PublicGhost | null;
   actor: number | null;
   currentBet: number;
   minRaise: number;
@@ -97,10 +101,29 @@ export interface PublicHand {
   button: number;
   smallBlindSeat: number;
   bigBlindSeat: number;
-  /** Undealt board cards revealed by a rabbit hunt (showdown only). */
-  rabbit: Card[] | null;
+  /** Per board: undealt cards revealed by a rabbit hunt (showdown only). */
+  rabbit: Card[][] | null;
   /** A rabbit hunt is possible for this hand (ended early, option on, not yet revealed). */
   rabbitAvailable: boolean;
+}
+
+export interface PublicGhost {
+  /** Face-down (null) until the run-out or showdown. */
+  cards: (Card | null)[];
+  /** Dead money riding in the main pot this hand. */
+  stake: number;
+  handName?: string;
+  bestCards?: Card[];
+  /** Chips the ghost took this hand (showdown only). */
+  won: number;
+}
+
+export interface GhostInfo {
+  enabled: boolean;
+  /** Chips the ghost is sitting on between hands. */
+  stack: number;
+  /** A vote in progress to turn the ghost on/off. */
+  vote: { on: boolean; votes: number; needed: number; voted: boolean } | null;
 }
 
 export interface RebuyRequest {
@@ -127,6 +150,7 @@ export interface TableView {
   hud: Record<string, HudCounters>;
   /** Operator feature flags in force at this table. */
   flags: Flags;
+  ghost: GhostInfo;
   me: {
     userId: string;
     seat: number | null;
@@ -183,6 +207,8 @@ export type ClientMessage =
   | { t: "listHands" }
   | { t: "getHand"; number: number }
   | { t: "vote"; number: number }
+  | { t: "ghostVote"; on: boolean }
+  | { t: "taunt"; id: number }
   | { t: "ping" };
 
 // ----- server -> client -----
@@ -194,7 +220,34 @@ export type ServerMessage =
   | { t: "ended"; results: SessionResultRow[] }
   | { t: "hands"; hands: HandSummary[] }
   | { t: "hand"; hand: HandRecordView }
+  | { t: "taunt"; taunt: TauntMessage }
   | { t: "pong"; serverTime: number };
+
+export interface TauntMessage {
+  userId: string;
+  name: string;
+  /** Seat of the sender, null for a spectator. */
+  seat: number | null;
+  id: number;
+  ts: number;
+}
+
+/** Canned taunts; the client only ever sends an index. */
+export const TAUNTS: { text: string; emoji: string }[] = [
+  { text: "Nice hand", emoji: "🙄" },
+  { text: "Call me", emoji: "📞" },
+  { text: "Bluff!", emoji: "🤥" },
+  { text: "Ship it", emoji: "🚢" },
+  { text: "Nit", emoji: "🐢" },
+  { text: "Run it twice?", emoji: "🎲" },
+  { text: "Pay me", emoji: "💰" },
+  { text: "GG", emoji: "🤝" },
+  { text: "Ouch", emoji: "😭" },
+  { text: "Chicken", emoji: "🐔" },
+  { text: "Fold already", emoji: "🥱" },
+  { text: "BOOM", emoji: "💥" },
+];
+export const TAUNT_COOLDOWN_MS = 6000;
 
 // ----- REST -----
 export interface UserInfo {
@@ -257,7 +310,7 @@ export const LIMITS = {
 } as const;
 
 export function defaultConfig(): TableConfig {
-  return { variant: "nlhe", smallBlind: 1, bigBlind: 2, ante: 0, startingStack: 200, maxSeats: 8, actionTimerMs: 30_000 };
+  return { variant: "nlhe", smallBlind: 1, bigBlind: 2, ante: 0, startingStack: 200, maxSeats: 8, actionTimerMs: 30_000, boards: 1, squid: false };
 }
 
 export function validateConfig(input: unknown): TableConfig {
@@ -275,7 +328,10 @@ export function validateConfig(input: unknown): TableConfig {
     startingStack: int(o.startingStack, 1, 100_000_000, d.startingStack),
     maxSeats: int(o.maxSeats, 2, 8, d.maxSeats),
     actionTimerMs: int(o.actionTimerMs, 5_000, 300_000, d.actionTimerMs),
+    boards: int(o.boards, 1, 3, d.boards),
+    squid: typeof o.squid === "boolean" ? o.squid : d.squid,
   };
+  if (cfg.boards === 1) cfg.squid = false;
   if (cfg.bigBlind < cfg.smallBlind) cfg.bigBlind = cfg.smallBlind;
   if (cfg.startingStack < cfg.bigBlind) cfg.startingStack = cfg.bigBlind;
   return cfg;

@@ -44,9 +44,17 @@ The first deploy creates the two Durable Object classes via the `v1` migration i
 - **Reconnect:** the client reconnects with exponential backoff and receives the full state on open. A dropped player is auto-folded by the timer and sits out from the next hand until they return.
 - **Session end:** the host ends the session; each player's buy-in, cash-out, net, hands and biggest pot are written to `AccountsDO`, which powers the leaderboard and profile pages.
 
+## House games and fun stuff
+
+- **Ghost player** (vote-in, majority of seated players): a ghost is dealt into every hand but never bets. It always sees showdown and can only win there, and only the main pot. When it wins, its whole stack rides into the next hand's main pot as dead money (shown as a separate 👻 pot; it never changes pot-limit bet sizing). When a player beats it, its stack resets to 0 and that player takes the dead money too. The ghost can only be voted off while its stack is 0. The ghost shows its cards at the end of every hand.
+- **Multiple boards / Squid Game 🦑** (host setting, 1–3 boards): every pot is split equally between boards. With Squid Game on, when the river is dealt the board with the lowest river card is eliminated before river betting (ties: turn, then flop cards last to first, then river suit). Works with every variant as long as the deck has enough cards; the engine deals fewer boards (or refuses to start) when it does not.
+- **Bad beat splash 💔**: at showdown the engine enumerates the river for every loser. A loser who was at least 80% to win with one card to come gets a full-screen "You got rivered" moment for everyone (the ghost can be the victim too) and the next hand waits a little longer.
+- **Taunts**: a smiley button sends one of 12 canned taunts as a speech bubble over your seat for a few seconds (one every 6 seconds).
+- **Sounds**: synthesised chips, cards, all-in, win, Squid elimination, ghost entrance and bad-beat womp via WebAudio; mute per device with the bell.
+
 ## Feature flags (kill switches)
 
-Every optional feature has an operator flag in `src/shared/flags.ts` (HUD, replays, replay equities, rabbit hunting, chat, Omaha/Pineapple variants, leaderboard, signups, creating tables, turn sounds). All default to on. Admins see a **Feature flags** section on their profile page; flipping one is stored in `AccountsDO` and pushed to every open table at once, so a misbehaving feature can be switched off mid-session without a redeploy. Server-enforced flags also reject the underlying messages/API calls, not just hide the UI.
+Every optional feature has an operator flag in `src/shared/flags.ts` (HUD, replays, replay equities, rabbit hunting, chat, Omaha/Pineapple variants, leaderboard, signups, creating tables, sounds, ghost player, multi-board/Squid Game, bad beat splash, taunts). All default to on. Admins see a **Feature flags** section on their profile page; flipping one is stored in `AccountsDO` and pushed to every open table at once, so a misbehaving feature can be switched off mid-session without a redeploy. Server-enforced flags also reject the underlying messages/API calls, not just hide the UI.
 
 Admins are the usernames in the `ADMIN_USERS` var in `wrangler.jsonc` (comma-separated) plus the first account ever created. `.dev.vars` sets `ADMIN_USERS=smoke_admin` for local dev so the smoke test can exercise the admin API.
 

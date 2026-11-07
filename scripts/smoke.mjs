@@ -26,6 +26,7 @@ function connect(who, code) {
       if (m.t === "ended") st.ended = m.results;
       if (m.t === "hands") st.handsList = m.hands;
       if (m.t === "hand") st.record = m.hand;
+      if (m.t === "taunt") (st.taunts ??= []).push(m.taunt);
     };
     ws.onopen = () => res(st);
     ws.onerror = (e) => rej(e);
@@ -75,7 +76,7 @@ for (let i = 0; i < 20 && A.view.hand && A.view.hand.phase !== "showdown"; i++) 
   await wait(350);
 }
 await wait(3000); // run-out alarms
-assert(A.view.hand.phase === "showdown" && A.view.hand.board.length === 5, "all-in hand ran out to showdown via alarms");
+assert(A.view.hand.phase === "showdown" && A.view.hand.boards[0].length === 5, "all-in hand ran out to showdown via alarms");
 assert(B2.view.seats[0].cards.every((c) => typeof c === "string"), "cards revealed at showdown");
 const total = A.view.seats.filter(Boolean).reduce((s, x) => s + x.stack, 0);
 assert(total === 400, "chips conserved (400)");
@@ -114,14 +115,66 @@ send(A, { t: "getHand", number: list[0].number });
 await wait(300);
 assert(A.record.unlocked && A.record.players.every((p) => p.hole.every((c) => typeof c === "string")), "unlocked record reveals all hole cards");
 assert(Array.isArray(A.record.rabbit), "record carries rabbit cards");
-if (A.view.hand?.phase === "showdown" && A.view.hand.board.length < 5 && A.view.hand.rabbitAvailable) {
+if (A.view.hand?.phase === "showdown" && A.view.hand.boards[0].length < 5 && A.view.hand.rabbitAvailable) {
   send(A, { t: "rabbit" });
   await wait(300);
-  assert(A.view.hand.rabbit && A.view.hand.rabbit.length === 5 - A.view.hand.board.length, "rabbit hunt reveals the remaining board");
+  assert(A.view.hand.rabbit && A.view.hand.rabbit[0].length === 5 - A.view.hand.boards[0].length, "rabbit hunt reveals the remaining board");
 } else console.log("skip rabbit check (last hand reached the river)");
 send(A, { t: "options", patch: { autoUnlockReplays: true } });
 await wait(200);
 assert(A.view.options.autoUnlockReplays === true, "host can change table options");
+
+// ----- ghost player, Squid Game, taunts -----
+assert(A.view.ghost && A.view.ghost.enabled === false, "ghost is off by default");
+send(A, { t: "ghostVote", on: true });
+await wait(200);
+assert(A.view.ghost.vote && A.view.ghost.vote.votes === 1 && A.view.ghost.vote.needed === 2 && A.view.ghost.vote.voted === true, "one ghost vote registered (needs 2)");
+send(B2, { t: "ghostVote", on: true });
+await wait(200);
+assert(A.view.ghost.enabled === true && A.view.ghost.vote === null, "majority vote summons the ghost");
+send(A, { t: "config", patch: { boards: 2, squid: true } });
+await wait(200);
+assert(A.view.config.boards === 2 && A.view.config.squid === true || (A.view.hand && A.view.hand.phase !== "showdown"), "host set two boards with Squid Game");
+// top both players back up so a hand can be dealt, then play one ghost + squid hand
+send(A, { t: "rebuy", amount: 200 }); send(B2, { t: "rebuy", amount: 200 });
+await wait(200);
+if (A.view.rebuyRequests.length) for (const rq of A.view.rebuyRequests) send(A, { t: "approveRebuy", playerId: rq.playerId, approve: true });
+await wait(200);
+if (A.view.status !== "running") send(A, { t: A.view.status === "paused" ? "resume" : "start" });
+await wait(200);
+const tauntErrs = A.errors.length;
+send(A, { t: "taunt", id: 3 });
+await wait(200);
+assert(A.errors.length === tauntErrs && B2.taunts && B2.taunts.length === 1 && B2.taunts[0].id === 3 && B2.taunts[0].userId === a.user.id, "taunt broadcast to the table");
+send(A, { t: "taunt", id: 4 });
+await wait(200);
+assert(A.errors.at(-1)?.code === "taunt_cooldown", "taunt cooldown enforced");
+// wait for the next hand to start with the ghost and two boards
+let ghostHand = null;
+for (let i = 0; i < 60 && !ghostHand; i++) {
+  await wait(250);
+  const h = A.view.hand;
+  if (h && h.ghost && h.phase !== "showdown") ghostHand = h;
+}
+assert(ghostHand && ghostHand.boards.length === 2 && ghostHand.ghost.cards.length === 4 && ghostHand.ghost.cards.every((c) => c === null), `ghost dealt face-down into a two-board PLO hand (status ${A.view.status}, hand ${JSON.stringify(A.view.hand && { n: A.view.hand.number, phase: A.view.hand.phase, boards: A.view.hand.boards.length, ghost: !!A.view.hand.ghost })}, stacks ${A.view.seats.filter(Boolean).map((x) => x.stack)})`);
+// play it out: shove/call until showdown
+for (let i = 0; i < 20; i++) {
+  const h = A.view.hand;
+  if (!h || h.phase === "showdown") break;
+  const me = h.actor === 0 ? A : h.actor === 3 ? B2 : null;
+  if (me && h.phase === "betting" && me.view.me.limits) send(me, { t: "action", seq: h.actionSeq, action: { type: me.view.me.limits.canRaise ? "allin" : "call" } });
+  await wait(350);
+}
+await wait(4500);
+const gh = A.view.hand;
+assert(gh && gh.phase === "showdown" && gh.boards.every((b) => b.length === 5), "two-board hand ran out to showdown");
+assert(gh.eliminated === 0 || gh.eliminated === 1, "Squid Game eliminated one board");
+assert(gh.ghost.cards.every((c) => typeof c === "string"), "ghost cards shown at showdown");
+const chipsNow = A.view.seats.filter(Boolean).reduce((s, x) => s + x.stack, 0) + A.view.ghost.stack;
+const chipsExpected = A.view.seats.filter(Boolean).reduce((s, x) => s + x.totalBuyIn, 0);
+assert(chipsNow === chipsExpected, `chips conserved with ghost (${chipsNow})`);
+assert(A.log.some((l) => l.includes("Board") && l.includes("eliminated")), "elimination logged");
+send(A, { t: "config", patch: { boards: 1 } });
 
 // ----- feature flags -----
 const admin = await login("smoke_admin", "1234"); // ADMIN_USERS=smoke_admin in .dev.vars
@@ -163,7 +216,7 @@ try {
 await wait(150);
 assert(A.view.flags.hud === true && Object.keys(A.view.hud).length > 0, "HUD back after flag restored");
 const pub = await (await fetch(`${BASE}/api/flags`)).json();
-assert(pub.flags && Object.keys(pub.flags).length >= 10, "public flags endpoint");
+assert(pub.flags && Object.keys(pub.flags).length >= 14, "public flags endpoint");
 
 send(A, { t: "end" });
 await wait(600);
@@ -175,7 +228,7 @@ assert(stats.stats.sessions === 1, "profile stats recorded one session");
 assert(stats.stats.hud.hands >= 1, "lifetime HUD updated at session end");
 const hudApi = await (await fetch(`${BASE}/api/hud?ids=${a.user.id},${b.user.id}`, { headers: { cookie: a.cookie } })).json();
 assert(hudApi.rows.length === 2, "HUD API returns both players");
-assert(A.errors.every((e) => e.code === "disabled") && B2.errors.length === 0, "no unexpected socket errors");
+assert(A.errors.every((e) => e.code === "disabled" || e.code === "taunt_cooldown") && B2.errors.length === 0, "no unexpected socket errors");
 A.ws.close(); B2.ws.close();
 console.log("\nSMOKE PASSED");
 process.exit(0);

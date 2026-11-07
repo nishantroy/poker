@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { advance, applyAction, canStartHand, computePots, forfeit, getLimits, startHand, timeout, EngineError } from "@engine/index";
+import { advance, applyAction, canStartHand, computePots, forfeit, getLimits, startHand, timeout, EngineError, setGhost, squidLoser, GHOST_SEAT } from "@engine/index";
 import { table, startRigged, act, stacks, awards, fixedRng } from "./helpers";
 
 describe("hand setup", () => {
@@ -185,7 +185,7 @@ describe("side pots and showdown", () => {
     expect(s.hand!.phase).toBe("runout");
     expect(s.hand!.players.every((p) => p.revealed)).toBe(true);
     s = advance(s).state; // flop
-    expect(s.hand!.board).toHaveLength(3);
+    expect(s.hand!.boards[0]).toHaveLength(3);
     s = advance(s).state; // turn
     s = advance(s).state; // river
     expect(s.hand!.street).toBe("river");
@@ -256,7 +256,7 @@ describe("pineapple discards", () => {
     s = act(s, 2, "check").state;
     expect(s.hand!.phase).toBe("discard");
     expect(s.hand!.pendingDiscard.sort()).toEqual([0, 1, 2]);
-    expect(s.hand!.board).toHaveLength(0);
+    expect(s.hand!.boards[0]).toHaveLength(0);
     s = applyAction(s, 0, { type: "discard", amount: 0 }).state;
     s = applyAction(s, 2, { type: "discard", amount: 2 }).state;
     expect(s.hand!.phase).toBe("discard");
@@ -344,5 +344,181 @@ describe("forfeit", () => {
     const r2 = forfeit(r.state, 1);
     expect(r2.state.hand!.phase).toBe("showdown");
     expect(stacks(r2.state)).toEqual([1015, 995, 990]);
+  });
+});
+
+describe("multiple boards and Squid Game", () => {
+  it("deals every board and splits the pot equally between boards", () => {
+    // sb (seat1) AA, bb (seat2) 22, button (seat0) 77; board A gives the deuces a set, board B gives aces top pair
+    let s = startRigged(table([1000, 1000, 1000], { boards: 2 }), 0, "Ah 2h 7c As 2s 7d  2c Kd 9h Qs Jd 5c  3d 4h  8s Tc").state;
+    s = act(s, 0, "fold").state;
+    s = act(s, 1, "allin").state;
+    s = act(s, 2, "allin").state;
+    expect(s.hand!.phase).toBe("runout");
+    s = advance(s).state; // flop (both boards)
+    expect(s.hand!.boards.map((b) => b.length)).toEqual([3, 3]);
+    s = advance(s).state; // turn
+    s = advance(s).state; // river
+    const r = advance(s);
+    expect(r.state.hand!.phase).toBe("showdown");
+    const res = r.state.hand!.result!;
+    // 2000 pot: 1000 per board. Board 0 (2c Kd 9h 3d 8s) -> set of deuces wins; board 1 (Qs Jd 5c 4h Tc) -> aces win
+    expect(res.pots[0]!.winners.map((w) => [w.board, w.seat, w.amount])).toEqual([[0, 2, 1000], [1, 1, 1000]]);
+    expect(stacks(r.state)).toEqual([1000, 1000, 1000]);
+    expect(res.boardHands[0]![2]!.name).toMatch(/Twos/);
+  });
+  it("Squid Game eliminates the board with the lowest river, ties broken by turn then flop", () => {
+    expect(squidLoser([["2c", "3c", "4c", "5c", "Kd"], ["2d", "3d", "4d", "5d", "9s"]])).toBe(1);
+    // same river rank: compare turn
+    expect(squidLoser([["2c", "3c", "4c", "Jc", "Kd"], ["2d", "3d", "4d", "5d", "Ks"]])).toBe(1);
+    // same river and turn: compare last flop card
+    expect(squidLoser([["2c", "3c", "4c", "Jc", "Kd"], ["2d", "3d", "9d", "Jd", "Ks"]])).toBe(0);
+  });
+  it("Squid Game: the eliminated board pays nothing and river betting still happens", () => {
+    // board 0 river 3d (low) vs board 1 river Tc -> board 0 eliminated; the full pot goes to board 1 (aces)
+    let s = startRigged(table([1000, 1000, 1000], { boards: 2, squid: true }), 0, "Ah 2h 7c As 2s 7d  2c Kd 9h Qs Jd 5c  Qd 4h  3d Tc").state;
+    s = act(s, 0, "fold").state;
+    s = act(s, 1, "call").state;
+    s = act(s, 2, "check").state;
+    s = act(s, 1, "check").state; s = act(s, 2, "check").state; // flop
+    s = act(s, 1, "check").state;
+    const riverStep = act(s, 2, "check"); // turn checked through: river dealt, Squid elimination happens here
+    s = riverStep.state;
+    expect(riverStep.events.some((e) => e.type === "boardEliminated" && e.board === 0)).toBe(true);
+    expect(s.hand!.street).toBe("river");
+    expect(s.hand!.eliminated).toBe(0);
+    expect(s.hand!.phase).toBe("betting");
+    s = act(s, 1, "check").state;
+    const r = act(s, 2, "check");
+    expect(r.state.hand!.phase).toBe("showdown");
+    expect(r.state.hand!.result!.pots[0]!.winners).toEqual([expect.objectContaining({ seat: 1, amount: 20, board: 1 })]);
+    expect(stacks(r.state)).toEqual([1000, 1010, 990]);
+  });
+  it("falls back to fewer boards when the deck is too short", () => {
+    const s = startRigged(table([500, 500, 500, 500, 500, 500, 500, 500], { variant: "plo5", boards: 3 }), 0).state;
+    // 8 x 5 = 40 hole cards leave 12: only two boards fit
+    expect(s.hand!.boards).toHaveLength(2);
+    expect(() => startHand(table([500, 500, 500, 500, 500, 500, 500, 500], { variant: "plo6" }))).toThrow(/Not enough cards/);
+  });
+});
+
+describe("ghost player", () => {
+  it("is dealt in, cannot win when everyone folds, and its stake goes to the winner", () => {
+    let s = setGhost(table([1000, 1000, 1000]), true);
+    s.ghost.stack = 50;
+    const r0 = startRigged(s, 0);
+    s = r0.state;
+    expect(s.hand!.ghost).not.toBeNull();
+    expect(s.hand!.ghost!.hole).toHaveLength(2);
+    expect(s.hand!.ghost!.stake).toBe(50);
+    expect(s.ghost.stack).toBe(0);
+    expect(r0.events.some((e) => e.type === "ghostDealt" && e.stake === 50)).toBe(true);
+    s = act(s, 0, "fold").state;
+    const r = act(s, 1, "fold");
+    expect(r.state.hand!.phase).toBe("showdown");
+    // bb wins blinds 15 + ghost stake 50
+    expect(stacks(r.state)).toEqual([1000, 995, 1055]);
+    expect(r.state.ghost.stack).toBe(0);
+    expect(r.events.some((e) => e.type === "ghostShown" && e.won === 0)).toBe(true);
+  });
+  it("wins the main pot at showdown and the stake then rides into the next hand", () => {
+    // sb 22, bb 33, ghost AA; board pairs nothing -> ghost wins main pot
+    let s = setGhost(table([1000, 1000]), true);
+    s = startRigged(s, 0, "2h 3h 2s 3s Ah Ad  7c 8d Tc Qs Kd").state;
+    s = act(s, 0, "allin").state;
+    s = act(s, 1, "call").state;
+    expect(s.hand!.ghost!.revealed).toBe(true);
+    s = advance(s).state; s = advance(s).state; s = advance(s).state;
+    const r = advance(s);
+    const res = r.state.hand!.result!;
+    expect(res.pots[0]!.winners).toEqual([expect.objectContaining({ seat: GHOST_SEAT, amount: 2000 })]);
+    expect(r.state.ghost.stack).toBe(2000);
+    expect(res.ghost!.won).toBe(2000);
+    expect(stacks(r.state)).toEqual([0, 0]);
+    expect(() => setGhost(r.state, false)).toThrow(/still has chips/);
+  });
+  it("only competes for the main pot and splits ties", () => {
+    // button(seat0, 1000) KK, sb(seat1, 100) AA, bb(seat2, 1000) AA-ish? use: seat1 short with AA, ghost AA too -> tie on main pot
+    let s = setGhost(table([1000, 100, 1000]), true);
+    s.ghost.stack = 100;
+    s = startRigged(s, 0, "Ah 7h Kc Ad 7s Kd As Ac  2c 5d 9h Jc 4s").state;
+    // deal order sb(1) bb(2) btn(0): sb AA, bb 77, btn KK, ghost As Ac
+    s = act(s, 0, "allin").state;
+    s = act(s, 1, "allin").state;
+    s = act(s, 2, "allin").state;
+    s = advance(s).state; s = advance(s).state; s = advance(s).state;
+    const r = advance(s);
+    const res = r.state.hand!.result!;
+    // main pot 300 + ghost 100 = 400 split between sb and ghost; side pot 1800 to btn (KK beats 77)
+    const main = res.pots[0]!;
+    expect(main.amount).toBe(400);
+    expect(main.winners.map((w) => [w.seat, w.amount]).sort()).toEqual([[-1, 200], [1, 200]].sort());
+    expect(res.pots[1]!.winners).toEqual([expect.objectContaining({ seat: 0, amount: 1800 })]);
+    expect(r.state.ghost.stack).toBe(200);
+    expect(stacks(r.state)).toEqual([1800, 200, 0]);
+  });
+  it("sits out a hand that has no room for its cards", () => {
+    let s = setGhost(table([500, 500, 500, 500, 500, 500, 500], { variant: "plo6" }), true);
+    s.ghost.stack = 30;
+    s = startRigged(s, 0).state;
+    expect(s.hand!.ghost).toBeNull();
+    expect(s.ghost.stack).toBe(30);
+  });
+});
+
+describe("bad beats", () => {
+  it("flags a loser who was over 80% with one card to come", () => {
+    // sb KK vs bb 22; board K 7 2 Q then river 2 -> quads beat the set
+    let s = startRigged(table([1000, 1000]), 0, "Kh 2h Ks 2s  Kc 7d 2c Qs 2d").state;
+    s = act(s, 0, "allin").state;
+    s = act(s, 1, "call").state;
+    s = advance(s).state; s = advance(s).state; s = advance(s).state;
+    const r = advance(s);
+    const bb = r.state.hand!.result!.badBeat;
+    expect(bb).not.toBeNull();
+    expect(bb!.victim).toBe(0);
+    expect(bb!.winner).toBe(1);
+    expect(bb!.equity).toBeGreaterThan(90);
+    expect(r.events.some((e) => e.type === "badBeat")).toBe(true);
+  });
+  it("does not flag an ordinary loss", () => {
+    let s = startRigged(table([1000, 1000]), 0, "Ah 9c Kh 9d  2s 5d 7h Jc Qd").state;
+    s = act(s, 0, "allin").state;
+    s = act(s, 1, "call").state;
+    s = advance(s).state; s = advance(s).state; s = advance(s).state;
+    const r = advance(s);
+    expect(r.state.hand!.result!.badBeat).toBeNull();
+  });
+});
+
+describe("chip conservation with ghost and boards", () => {
+  it("random play keeps players + ghost + pot constant", () => {
+    let seed = 11;
+    const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+    for (const cfg of [{ variant: "nlhe", boards: 2, squid: true }, { variant: "plo", boards: 3, squid: true }, { variant: "crazy-pineapple", boards: 2, squid: false }] as const) {
+      let s = setGhost(table([400, 1000, 50, 300, 900], cfg), true);
+      const total = 2650;
+      for (let hand = 0; hand < 40 && canStartHand(s); hand++) {
+        s = startHand(s, (n) => Math.floor(rnd() * n)).state;
+        let guard = 0;
+        while (s.hand!.phase !== "showdown" && guard++ < 500) {
+          const h = s.hand!;
+          if (h.phase === "runout") { s = advance(s).state; continue; }
+          if (h.phase === "discard") { s = timeout(s).state; continue; }
+          const seat = h.actor!;
+          const lim = getLimits(s, seat);
+          const x = rnd();
+          if (x < 0.15) s = act(s, seat, "fold").state;
+          else if (x < 0.6) s = act(s, seat, lim.canCheck ? "check" : "call").state;
+          else if (x < 0.9 && lim.canRaise) {
+            const amt = lim.minRaiseTo + Math.floor(rnd() * (lim.maxRaiseTo - lim.minRaiseTo + 1));
+            s = act(s, seat, "raise", amt).state;
+          } else s = act(s, seat, "allin").state;
+        }
+        expect(s.hand!.phase).toBe("showdown");
+        expect(s.seats.reduce((a, x) => a + (x?.stack ?? 0), 0) + s.ghost.stack).toBe(total);
+        if (s.hand!.ghost) expect(s.hand!.ghost.hole.length).toBeLessThanOrEqual(cfg.variant === "crazy-pineapple" ? 2 : 4);
+      }
+    }
   });
 });

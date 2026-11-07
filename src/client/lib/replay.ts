@@ -1,5 +1,5 @@
 import type { Card, HandRecordView, Street } from "@shared/protocol";
-import type { GameEvent } from "@engine/types";
+import { GHOST_SEAT, type GameEvent } from "@engine/types";
 import type { EquityRequest } from "./equity.worker";
 
 export interface StageAction {
@@ -12,8 +12,10 @@ export interface StageAction {
 export interface Stage {
   key: string;
   street: Street;
-  board: Card[];
-  /** players still in the hand when this street was dealt */
+  boards: Card[][];
+  /** Squid Game: board eliminated at this point (river stage only). */
+  eliminated: number | null;
+  /** players still in the hand when this street was dealt (GHOST_SEAT for the ghost) */
   seats: number[];
   actions: StageAction[];
   /** seats that folded during this street */
@@ -26,7 +28,9 @@ export const streetLabel = (s: Street) => STREET_LABEL[s];
 /** Split a hand's events into streets with the players alive at each. */
 export function buildStages(rec: HandRecordView): Stage[] {
   const alive = new Set(rec.players.map((p) => p.seat));
-  const stages: Stage[] = [{ key: "preflop", street: "preflop", board: [], seats: [...alive], actions: [], foldedHere: [] }];
+  if (rec.ghost) alive.add(GHOST_SEAT);
+  const nb = rec.boards.length || 1;
+  const stages: Stage[] = [{ key: "preflop", street: "preflop", boards: Array.from({ length: nb }, () => []), eliminated: null, seats: [...alive], actions: [], foldedHere: [] }];
   let cur = stages[0]!;
   const describe = (e: GameEvent): StageAction | null => {
     switch (e.type) {
@@ -42,8 +46,12 @@ export function buildStages(rec: HandRecordView): Stage[] {
   };
   for (const e of rec.events) {
     if (e.type === "street") {
-      cur = { key: e.street, street: e.street, board: [...e.board], seats: [...alive], actions: [], foldedHere: [] };
+      cur = { key: e.street, street: e.street, boards: e.boards.map((b) => [...b]), eliminated: null, seats: [...alive], actions: [], foldedHere: [] };
       stages.push(cur);
+      continue;
+    }
+    if (e.type === "boardEliminated") {
+      cur.eliminated = e.board;
       continue;
     }
     if (e.type === "action" && e.action === "fold") {
@@ -60,7 +68,8 @@ export function buildStages(rec: HandRecordView): Stage[] {
 export function equityRequest(rec: HandRecordView, stages: Stage[], id: number): EquityRequest | null {
   const cardsOf = new Map<number, Card[] | null>();
   for (const p of rec.players) cardsOf.set(p.seat, p.hole.every((c): c is Card => c !== null) ? (p.hole as Card[]) : null);
-  const allKnown = [...cardsOf.values()].flatMap((c) => c ?? []);
+  if (rec.ghost) cardsOf.set(GHOST_SEAT, rec.ghost.hole);
+  const allKnown = [...cardsOf.values()].flatMap((c) => c ?? []).concat(rec.ghost?.discarded ?? []);
   const req: EquityRequest = { id, variant: rec.variant, stages: [] };
   for (const st of stages) {
     const holes: Card[][] = [];
@@ -70,8 +79,10 @@ export function equityRequest(rec: HandRecordView, stages: Stage[], id: number):
       holes.push(c);
     }
     const inHand = new Set(holes.flat());
-    const dead = [...new Set([...allKnown, ...rec.players.flatMap((p) => p.discarded.filter((c): c is Card => c !== null))])].filter((c) => !inHand.has(c) && !st.board.includes(c));
-    req.stages.push({ key: st.key, board: st.board, seats: st.seats, holes, dead });
+    const onBoards = new Set(st.boards.flat());
+    const dead = [...new Set([...allKnown, ...rec.players.flatMap((p) => p.discarded.filter((c): c is Card => c !== null))])].filter((c) => !inHand.has(c) && !onBoards.has(c));
+    const boards = st.boards.filter((_, i) => i !== st.eliminated);
+    req.stages.push({ key: st.key, boards, seats: st.seats, holes, dead });
   }
   return req;
 }
