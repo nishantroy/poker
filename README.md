@@ -4,6 +4,8 @@ A hosted, mobile-friendly home-game poker app for 6–8 friends. Join a table by
 
 **Variants:** No-Limit Hold'em, Pot-Limit Omaha (4, 5 and 6 card), Pineapple and Crazy Pineapple. The host can switch the variant and blinds between hands.
 
+**Extras:** a per-player HUD (VPIP, PFR, 3-bet, AF, WTSD, W$SD for the session and lifetime), hand replays with street-by-street equities, and rabbit hunting.
+
 ## Stack
 
 - Cloudflare Workers (TypeScript) serving a React + Vite + Tailwind v4 frontend as static assets
@@ -42,6 +44,13 @@ The first deploy creates the two Durable Object classes via the `v1` migration i
 - **Reconnect:** the client reconnects with exponential backoff and receives the full state on open. A dropped player is auto-folded by the timer and sits out from the next hand until they return.
 - **Session end:** the host ends the session; each player's buy-in, cash-out, net, hands and biggest pot are written to `AccountsDO`, which powers the leaderboard and profile pages.
 
+## HUD, replays, equity and rabbit hunting
+
+- **HUD:** tap the bar-chart icon at the table to show a mini strip under each player (VPIP/PFR · AF · hands). Tap any avatar for the full session + lifetime table. Session counters are computed in `TableDO` from each finished hand (`src/engine/hud.ts`) and added to lifetime totals in `AccountsDO` when the host ends the session.
+- **Replays:** the Log/Chat panel has a Hands tab listing every finished hand. A replay shows each street's board, the players still in, their actions, and the result. Nothing is revealed while a hand is live.
+- **Equities and hidden cards are locked** until a majority of the players dealt into that hand vote to reveal (or the host turns on "Auto-reveal replays"). Your own cards and anything shown at the table are always visible. Equities are computed in a Web Worker on the client (`src/engine/equity.ts`): exact enumeration on the flop/turn/river, Monte Carlo preflop.
+- **Rabbit hunting:** when a hand ends before the river, anyone seated can tap "Rabbit hunt" to show the cards that would have come (the deck is fixed at the deal). The host can turn this off.
+
 ## Free-tier budget
 
 Expected usage for one 8-player, 4-hour session (~250 hands, ~25 actions/hand):
@@ -54,7 +63,7 @@ Expected usage for one 8-player, 4-hour session (~250 hands, ~25 actions/hand):
 | SQLite rows written | 100,000 | ~20,000 | 20% |
 | SQLite rows read | 5,000,000 | ~30,000 | < 1% |
 
-Row writes are the tightest budget: each action persists ~3 rows (state, meta, log line). Two simultaneous long sessions in one day still fit. If you host games most nights, consider batching log writes per street.
+Row writes are the tightest budget: each action persists ~3 rows (state, meta, log line) and each finished hand adds one replay record. Two simultaneous long sessions in one day still fit. If you host games most nights, consider batching log writes per street.
 
 ## Project layout
 

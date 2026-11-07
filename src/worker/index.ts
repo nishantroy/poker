@@ -31,6 +31,7 @@ const TABLE_CODE = /^[A-Z0-9]{4,8}$/;
 
 async function handleApi(req: Request, env: Env, path: string): Promise<Response> {
   const method = req.method;
+  const url = new URL(req.url);
   const acc = accounts(env);
 
   try {
@@ -89,6 +90,10 @@ async function handleApi(req: Request, env: Env, path: string): Promise<Response
     }
     if (path === "/api/leaderboard" && method === "GET") {
       return json({ rows: await acc.leaderboard() });
+    }
+    if (path === "/api/hud" && method === "GET") {
+      const ids = (url.searchParams.get("ids") ?? "").split(",").filter((x) => /^[a-f0-9]{1,32}$/.test(x));
+      return json({ rows: await acc.hud(ids) });
     }
     if (path === "/api/stats/me" && method === "GET") {
       return json({ stats: await acc.stats(user.id) });

@@ -4,6 +4,7 @@ import type { UserStats } from "@shared/protocol";
 import { api } from "../lib/api";
 import { Link } from "../lib/router";
 import { fmtNet, timeAgo } from "../lib/format";
+import { hudStats } from "@engine/hud";
 
 export function ProfilePage() {
   const [stats, setStats] = useState<UserStats | null | undefined>(undefined);
@@ -30,6 +31,10 @@ export function ProfilePage() {
             <Stat label="Best session" value={fmtNet(stats.bestSession)} tone="up" />
             <Stat label="Worst session" value={fmtNet(stats.worstSession)} tone="down" />
             <Stat label="Biggest pot won" value={stats.biggestPot.toLocaleString()} />
+          </section>
+          <section className="mb-8">
+            <h2 className="label">Lifetime HUD</h2>
+            <HudGrid hud={stats.hud} />
           </section>
           <section>
             <h2 className="label">Recent sessions</h2>
@@ -62,6 +67,32 @@ function Stat({ label, value, sub, tone, big }: { label: string; value: string; 
       <p className="text-xs uppercase tracking-wider text-dim font-semibold">{label}</p>
       <p className={`font-extrabold num ${big ? "text-3xl" : "text-xl"} ${color}`} style={{ fontFamily: "var(--font-display)" }}>{value}</p>
       {sub && <p className="text-xs text-muted">{sub}</p>}
+    </div>
+  );
+}
+
+function HudGrid({ hud }: { hud: UserStats["hud"] }) {
+  const s = hudStats(hud);
+  const f = (v: number | null, suf = "") => (v === null ? "–" : v === Infinity ? "∞" : `${v}${suf}`);
+  const items: [string, string, string][] = [
+    ["VPIP", f(s.vpip, "%"), "put money in preflop"],
+    ["PFR", f(s.pfr, "%"), "raised preflop"],
+    ["3-Bet", f(s.threeBet, "%"), "re-raised preflop"],
+    ["AF", f(s.af), "postflop aggression"],
+    ["WTSD", f(s.wtsd, "%"), "went to showdown"],
+    ["W$SD", f(s.wsd, "%"), "won at showdown"],
+  ];
+  if (s.hands === 0) return <p className="text-muted text-sm card-surface p-4">HUD stats appear after your first finished session.</p>;
+  return (
+    <div className="grid grid-cols-3 gap-2">
+      {items.map(([k, v, hint]) => (
+        <div key={k} className="card-surface p-3">
+          <p className="text-[11px] uppercase tracking-wider text-dim font-semibold">{k}</p>
+          <p className="text-xl font-extrabold num" style={{ fontFamily: "var(--font-display)" }}>{v}</p>
+          <p className="text-[11px] text-muted leading-tight">{hint}</p>
+        </div>
+      ))}
+      <p className="col-span-3 text-xs text-dim">Over {s.hands.toLocaleString()} hands.</p>
     </div>
   );
 }

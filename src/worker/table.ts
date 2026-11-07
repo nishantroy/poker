@@ -4,10 +4,12 @@ import {
   participants, removePlayer, seatPlayer, startHand, timeout,
   type GameEvent, type GameState, type TableConfig,
 } from "@engine/index";
+import { addHud, emptyHud, hudFromHand, type HandRecord, type HudCounters } from "@engine/hud";
 import type {
-  ChatMessage, ClientMessage, LogLine, PublicSeat, RebuyRequest, ServerMessage, SessionResultRow, TableStatus, TableView, TimerInfo,
+  ChatMessage, ClientMessage, HandRecordView, HandSummary, LogLine, PublicSeat, RebuyRequest, ServerMessage, SessionResultRow, TableOptions,
+  TableStatus, TableView, TimerInfo,
 } from "@shared/protocol";
-import { LIMITS, validateConfig } from "@shared/protocol";
+import { LIMITS, defaultOptions, validateConfig } from "@shared/protocol";
 import { accounts, type Env } from "./env";
 
 interface Departed {
@@ -38,6 +40,17 @@ interface Meta {
   /** seats that were sat out automatically because they disconnected; they come back on reconnect */
   autoSatOut: number[];
   timerKey?: string;
+  options: TableOptions;
+  /** session HUD counters per userId */
+  hud: Record<string, HudCounters>;
+  /** hand record being built for the hand in progress */
+  cur: { startedAt: number; events: GameEvent[]; startStacks: Record<number, number> } | null;
+  /** hand numbers whose replays reveal every card */
+  unlocked: number[];
+  /** reveal votes per hand number: userIds */
+  votes: Record<string, string[]>;
+  /** rabbit hunt revealed for this hand number */
+  rabbitShown: number | null;
 }
 
 interface Attachment {
@@ -55,6 +68,7 @@ CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS log (id INTEGER PRIMARY KEY, ts INTEGER NOT NULL, hand INTEGER NOT NULL, kind TEXT NOT NULL, text TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS chat (id INTEGER PRIMARY KEY, ts INTEGER NOT NULL, user_id TEXT NOT NULL, name TEXT NOT NULL, text TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS hands (number INTEGER PRIMARY KEY, variant TEXT NOT NULL, board TEXT NOT NULL, events TEXT NOT NULL, result TEXT, ended_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS hand_records (number INTEGER PRIMARY KEY, record TEXT NOT NULL, ended_at INTEGER NOT NULL);
 `;
 
 export class TableDO extends DurableObject<Env> {
@@ -79,7 +93,13 @@ export class TableDO extends DurableObject<Env> {
   private load() {
     const rows = this.sql.exec<{ key: string; value: string }>("SELECT key, value FROM kv").toArray();
     for (const r of rows) {
-      if (r.key === "meta") this.meta = JSON.parse(r.value) as Meta;
+      if (r.key === "meta") {
+        const m = JSON.parse(r.value) as Partial<Meta>;
+        this.meta = {
+          ...m, options: { ...defaultOptions(), ...(m.options ?? {}) }, hud: m.hud ?? {}, cur: m.cur ?? null, unlocked: m.unlocked ?? [],
+          votes: m.votes ?? {}, rabbitShown: m.rabbitShown ?? null, pendingConfig: m.pendingConfig ?? null, autoSatOut: m.autoSatOut ?? [],
+        } as Meta;
+      }
       if (r.key === "game") this.game = JSON.parse(r.value) as GameState;
     }
   }
@@ -104,7 +124,7 @@ export class TableDO extends DurableObject<Env> {
     this.meta = {
       code: args.code, name: args.name, hostId: args.hostId, hostName: args.hostName, status: "waiting",
       createdAt: Date.now(), timer: null, rebuyRequests: [], departed: [], logSeq: 0, chatSeq: 0, leaving: [],
-      pendingConfig: null, autoSatOut: [],
+      pendingConfig: null, autoSatOut: [], options: defaultOptions(), hud: {}, cur: null, unlocked: [], votes: {}, rabbitShown: null,
     };
     this.game = createGame(validateConfig(args.config));
     this.log("system", `Table created by ${args.hostName}.`);
@@ -390,6 +410,69 @@ export class TableDO extends DurableObject<Env> {
         return;
       }
 
+      case "options": {
+        requireHost();
+        const patch = msg.patch ?? {};
+        if (typeof patch.rabbitHunt === "boolean") meta.options.rabbitHunt = patch.rabbitHunt;
+        if (typeof patch.autoUnlockReplays === "boolean") meta.options.autoUnlockReplays = patch.autoUnlockReplays;
+        this.log("system", `Host set rabbit hunting ${meta.options.rabbitHunt ? "on" : "off"} and replay reveals to ${meta.options.autoUnlockReplays ? "automatic" : "majority vote"}.`);
+        this.afterChange();
+        return;
+      }
+
+      case "rabbit": {
+        const g = this.game!;
+        const h = g.hand;
+        if (!this.seatOf(att.userId)) throw new EngineError("not_seated", "Only seated players can rabbit hunt");
+        if (!meta.options.rabbitHunt) throw new EngineError("rabbit_off", "Rabbit hunting is turned off");
+        if (!h || h.phase !== "showdown" || h.board.length >= 5) throw new EngineError("no_rabbit", "Nothing to rabbit hunt");
+        if (meta.rabbitShown === h.number) return;
+        meta.rabbitShown = h.number;
+        const cards = this.rabbitCards(h);
+        this.log("system", `${att.name} rabbit hunts: ${cards.join(" ")} would have come.`);
+        this.afterChange();
+        return;
+      }
+
+      case "listHands": {
+        this.send(ws, { t: "hands", hands: this.handSummaries(att.userId) });
+        return;
+      }
+
+      case "getHand": {
+        const rec = this.loadRecord(Number(msg.number));
+        if (!rec) throw new EngineError("no_such_hand", "That hand is not available");
+        this.send(ws, { t: "hand", hand: this.recordView(rec, att.userId) });
+        return;
+      }
+
+      case "vote": {
+        const n = Number(msg.number);
+        const rec = this.loadRecord(n);
+        if (!rec) throw new EngineError("no_such_hand", "That hand is not available");
+        if (!rec.players.some((p) => p.playerId === att.userId)) throw new EngineError("not_in_hand", "Only players dealt into the hand can vote");
+        if (meta.unlocked.includes(n)) return;
+        const key = String(n);
+        const list = meta.votes[key] ?? [];
+        if (!list.includes(att.userId)) list.push(att.userId);
+        meta.votes[key] = list;
+        const needed = Math.floor(rec.players.length / 2) + 1;
+        if (list.length >= needed) {
+          meta.unlocked.push(n);
+          delete meta.votes[key];
+          this.log("system", `Hand #${n} replay unlocked: all cards and equities are now visible.`);
+        } else {
+          this.log("system", `${att.name} voted to reveal hand #${n} (${list.length}/${needed}).`);
+        }
+        this.save();
+        this.broadcast();
+        for (const sock of this.ctx.getWebSockets()) {
+          const a = sock.deserializeAttachment() as Attachment | null;
+          if (a) this.send(sock, { t: "hands", hands: this.handSummaries(a.userId) });
+        }
+        return;
+      }
+
       default:
         throw new EngineError("bad_message", "Unknown message");
     }
@@ -424,7 +507,15 @@ export class TableDO extends DurableObject<Env> {
   /** Commit a new engine state, log events, schedule the next timer, persist, and broadcast. */
   private applyStep(state: GameState, events: GameEvent[]) {
     const prev = this.game!;
+    const meta = this.meta!;
     this.game = state;
+    if (state.hand && (!prev.hand || prev.hand.number !== state.hand.number)) {
+      const startStacks: Record<number, number> = {};
+      for (const p of state.hand.players) startStacks[p.seat] = (state.seats[p.seat]?.stack ?? 0) + p.totalBet;
+      meta.cur = { startedAt: Date.now(), events: [], startStacks };
+      meta.rabbitShown = null;
+    }
+    if (meta.cur) meta.cur.events.push(...events);
     this.logEvents(prev, state, events);
     if (state.hand && state.hand.phase === "showdown" && (!prev.hand || prev.hand.phase !== "showdown")) {
       this.onHandEnded(events);
@@ -432,16 +523,34 @@ export class TableDO extends DurableObject<Env> {
     this.afterChange();
   }
 
-  private onHandEnded(events: GameEvent[]) {
+  private onHandEnded(_events: GameEvent[]) {
     const g = this.game!;
     const h = g.hand!;
-    this.sql.exec(
-      "INSERT OR REPLACE INTO hands (number, variant, board, events, result, ended_at) VALUES (?, ?, ?, ?, ?, ?)",
-      h.number, h.variant, JSON.stringify(h.board), JSON.stringify(events), JSON.stringify(h.result), Date.now(),
-    );
-    this.sql.exec("DELETE FROM hands WHERE number < ? ", h.number - 200);
-    // remove players who left mid-hand
     const meta = this.meta!;
+    const now = Date.now();
+    const rec: HandRecord = {
+      number: h.number, variant: h.variant, button: h.button, smallBlindSeat: h.smallBlindSeat, bigBlindSeat: h.bigBlindSeat,
+      blinds: { sb: g.config.smallBlind, bb: g.config.bigBlind, ante: g.config.ante },
+      players: h.players.map((p) => ({
+        seat: p.seat, playerId: p.playerId, name: g.seats[p.seat]?.name ?? "?", hole: [...p.hole], discarded: [...p.discarded],
+        startStack: meta.cur?.startStacks[p.seat] ?? 0, revealed: p.revealed && !p.folded, folded: p.folded,
+      })),
+      board: [...h.board], rabbit: this.rabbitCards(h), events: meta.cur?.events ?? [], result: h.result,
+      startedAt: meta.cur?.startedAt ?? now, endedAt: now,
+    };
+    this.sql.exec("INSERT OR REPLACE INTO hand_records (number, record, ended_at) VALUES (?, ?, ?)", h.number, JSON.stringify(rec), now);
+    this.sql.exec("DELETE FROM hand_records WHERE number < ?", h.number - 150);
+    meta.cur = null;
+    if (meta.options.autoUnlockReplays && !meta.unlocked.includes(h.number)) meta.unlocked.push(h.number);
+    if (meta.unlocked.length > 200) meta.unlocked = meta.unlocked.slice(-200);
+    // session HUD
+    const per = hudFromHand(rec);
+    for (const p of rec.players) {
+      const c = per[p.seat];
+      if (!c) continue;
+      meta.hud[p.playerId] = addHud(meta.hud[p.playerId] ?? emptyHud(), c);
+    }
+    // remove players who left mid-hand
     for (const seatNo of meta.leaving) {
       const seat = g.seats[seatNo];
       if (seat) this.departSeat(seatNo);
@@ -622,6 +731,7 @@ export class TableDO extends DurableObject<Env> {
     for (const ws of this.ctx.getWebSockets()) this.send(ws, { t: "ended", results });
     const endedAt = Date.now();
     void accounts(this.env).recordResults(meta.code, meta.name, results, endedAt);
+    void accounts(this.env).recordHud(meta.code, meta.hud);
   }
 
   private syncTableStatus() {
@@ -702,14 +812,66 @@ export class TableDO extends DurableObject<Env> {
           pots: computePots(h.players.map((p) => ({ ...p, totalBet: p.totalBet - p.streetBet }))),
           pendingDiscard: [...h.pendingDiscard], result: h.result, actionSeq: h.actionSeq, button: h.button,
           smallBlindSeat: h.smallBlindSeat, bigBlindSeat: h.bigBlindSeat,
+          rabbit: h.phase === "showdown" && meta.rabbitShown === h.number ? this.rabbitCards(h) : null,
+          rabbitAvailable: h.phase === "showdown" && h.board.length < 5 && meta.options.rabbitHunt && meta.rabbitShown !== h.number && !!mySeat,
         }
       : null;
 
     return {
       code: meta.code, name: meta.name, status: meta.status, hostId: meta.hostId, config: g.config, seats, button: g.button,
-      handCount: g.handCount, hand, timer: meta.timer, rebuyRequests: userId === meta.hostId ? meta.rebuyRequests : meta.rebuyRequests.filter((r) => r.playerId === userId),
+      handCount: g.handCount, hand, timer: meta.timer, options: meta.options, hud: meta.hud, rebuyRequests: userId === meta.hostId ? meta.rebuyRequests : meta.rebuyRequests.filter((r) => r.playerId === userId),
       me: { userId, seat: mySeat?.seat ?? null, limits, isHost: userId === meta.hostId },
       serverTime: Date.now(),
+    };
+  }
+
+  // ---------- replays ----------
+
+  /** The board cards that would have been dealt next (the deck is dealt from the end). */
+  private rabbitCards(h: { board: Card[]; deck: Card[] }): Card[] {
+    const n = 5 - h.board.length;
+    if (n <= 0) return [];
+    return h.deck.slice(h.deck.length - n).reverse();
+  }
+
+  private loadRecord(n: number): HandRecord | null {
+    if (!Number.isInteger(n)) return null;
+    const row = this.sql.exec<{ record: string }>("SELECT record FROM hand_records WHERE number = ?", n).toArray()[0];
+    return row ? (JSON.parse(row.record) as HandRecord) : null;
+  }
+
+  private voteInfo(rec: HandRecord, userId: string) {
+    const meta = this.meta!;
+    const list = meta.votes[String(rec.number)] ?? [];
+    return {
+      unlocked: meta.unlocked.includes(rec.number),
+      votes: list.length,
+      votesNeeded: Math.floor(rec.players.length / 2) + 1,
+      voted: list.includes(userId),
+      eligible: rec.players.some((p) => p.playerId === userId),
+    };
+  }
+
+  private handSummaries(userId: string): HandSummary[] {
+    const rows = this.sql.exec<{ record: string }>("SELECT record FROM hand_records ORDER BY number DESC LIMIT 60").toArray();
+    return rows.map((r) => {
+      const rec = JSON.parse(r.record) as HandRecord;
+      const pot = rec.players.reduce((a, p) => a + (rec.result ? -(rec.result.net[p.seat] ?? 0) : 0), 0);
+      const totalPot = rec.result ? rec.result.pots.reduce((a, p) => a + p.amount, 0) : pot;
+      const winners = [...new Set((rec.result?.pots ?? []).flatMap((p) => p.winners.map((w) => rec.players.find((x) => x.seat === w.seat)?.name ?? "?")))];
+      return { number: rec.number, variant: rec.variant, pot: totalPot, winners, board: rec.board, endedAt: rec.endedAt, ...this.voteInfo(rec, userId) };
+    });
+  }
+
+  private recordView(rec: HandRecord, userId: string): HandRecordView {
+    const info = this.voteInfo(rec, userId);
+    return {
+      ...rec,
+      players: rec.players.map((p) => {
+        const visible = info.unlocked || p.playerId === userId || p.revealed;
+        return { ...p, hole: visible ? p.hole : p.hole.map(() => null), discarded: visible ? p.discarded : p.discarded.map(() => null) };
+      }),
+      ...info,
     };
   }
 

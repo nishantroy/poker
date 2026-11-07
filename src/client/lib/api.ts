@@ -1,4 +1,4 @@
-import type { LeaderboardRow, TableConfig, TableSummary, UserInfo, UserStats } from "@shared/protocol";
+import type { HudRow, LeaderboardRow, TableConfig, TableSummary, UserInfo, UserStats } from "@shared/protocol";
 
 export class ApiError extends Error {
   constructor(public status: number, public code: string, message: string) {
@@ -27,4 +27,5 @@ export const api = {
   table: (code: string) => call<{ table: { code: string; name: string; status: string; hostName: string; config: TableConfig; players: number } }>(`/api/tables/${encodeURIComponent(code)}`),
   leaderboard: () => call<{ rows: LeaderboardRow[] }>("/api/leaderboard"),
   myStats: () => call<{ stats: UserStats | null }>("/api/stats/me"),
+  hud: (ids: string[]) => call<{ rows: HudRow[] }>(`/api/hud?ids=${ids.map(encodeURIComponent).join(",")}`),
 };

@@ -24,6 +24,8 @@ function connect(who, code) {
       if (m.t === "error") st.errors.push(m);
       if (m.t === "log") st.log.push(...m.lines.map((l) => l.text));
       if (m.t === "ended") st.ended = m.results;
+      if (m.t === "hands") st.handsList = m.hands;
+      if (m.t === "hand") st.record = m.hand;
     };
     ws.onopen = () => res(st);
     ws.onerror = (e) => rej(e);
@@ -87,6 +89,40 @@ if (A.view.hand?.number === 2) {
   console.log("skip timer check (a player busted)");
 }
 
+// ---- replay, votes, rabbit hunt, HUD ----
+const hud = A.view.hud;
+assert(hud[a.user.username ? a.user.id : ""]?.hands >= 1 && hud[b.user.id]?.hands >= 1, "session HUD counters recorded for both players");
+send(A, { t: "listHands" });
+await wait(300);
+const list = await new Promise((res) => { const i = setInterval(() => { if (A.handsList) { clearInterval(i); res(A.handsList); } }, 50); });
+assert(list.length >= 1 && list[0].unlocked === false && list[0].votesNeeded === 2, "hand list shows locked hand needing 2 votes");
+send(A, { t: "getHand", number: list[0].number });
+await wait(300);
+let rec = A.record;
+assert(rec && rec.events.length > 5 && rec.players.length === 2, "hand record has full event history");
+const bobInRec = rec.players.find((p) => p.playerId === b.user.id);
+const aliceInRec = rec.players.find((p) => p.playerId === a.user.id);
+assert(aliceInRec.hole.every((c) => typeof c === "string"), "record shows my own cards");
+// the first hand went to showdown, so bob's cards were revealed anyway; the locked state is about non-revealed players
+send(A, { t: "vote", number: list[0].number });
+await wait(300);
+assert(A.handsList.find((h) => h.number === list[0].number).votes === 1, "one vote registered");
+send(B2, { t: "vote", number: list[0].number });
+await wait(300);
+assert(A.handsList.find((h) => h.number === list[0].number).unlocked === true, "majority vote unlocks the replay");
+send(A, { t: "getHand", number: list[0].number });
+await wait(300);
+assert(A.record.unlocked && A.record.players.every((p) => p.hole.every((c) => typeof c === "string")), "unlocked record reveals all hole cards");
+assert(Array.isArray(A.record.rabbit), "record carries rabbit cards");
+if (A.view.hand?.phase === "showdown" && A.view.hand.board.length < 5 && A.view.hand.rabbitAvailable) {
+  send(A, { t: "rabbit" });
+  await wait(300);
+  assert(A.view.hand.rabbit && A.view.hand.rabbit.length === 5 - A.view.hand.board.length, "rabbit hunt reveals the remaining board");
+} else console.log("skip rabbit check (last hand reached the river)");
+send(A, { t: "options", patch: { autoUnlockReplays: true } });
+await wait(200);
+assert(A.view.options.autoUnlockReplays === true, "host can change table options");
+
 send(A, { t: "end" });
 await wait(600);
 assert(Array.isArray(A.ended) && A.ended.length === 2, "session ended with results for both players");
@@ -94,6 +130,9 @@ const lb = await (await fetch(`${BASE}/api/leaderboard`, { headers: { cookie: a.
 assert(lb.rows.some((x) => x.username === a.user.username), "leaderboard includes the player");
 const stats = await (await fetch(`${BASE}/api/stats/me`, { headers: { cookie: a.cookie } })).json();
 assert(stats.stats.sessions === 1, "profile stats recorded one session");
+assert(stats.stats.hud.hands >= 1, "lifetime HUD updated at session end");
+const hudApi = await (await fetch(`${BASE}/api/hud?ids=${a.user.id},${b.user.id}`, { headers: { cookie: a.cookie } })).json();
+assert(hudApi.rows.length === 2, "HUD API returns both players");
 assert(A.errors.length === 0 && B2.errors.length === 0, "no unexpected socket errors");
 A.ws.close(); B2.ws.close();
 console.log("\nSMOKE PASSED");

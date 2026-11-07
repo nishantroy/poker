@@ -1,6 +1,7 @@
 import { Check, Crown, Send, UserX, X } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import type { ChatMessage, ClientMessage, LogLine, SessionResultRow, TableConfig, TableView } from "@shared/protocol";
+import type { ChatMessage, ClientMessage, HandRecordView, HandSummary, LogLine, SessionResultRow, TableConfig, TableView } from "@shared/protocol";
+import { HandsList, ReplayView } from "./Replay";
 import { VARIANTS } from "@engine/variants";
 import { fmtChips, fmtNet } from "../lib/format";
 import { navigate } from "../lib/router";
@@ -128,6 +129,12 @@ export function HostPanel({ open, onClose, view, send }: { open: boolean; onClos
           <button className="btn btn-primary w-full" disabled={!dirty} onClick={() => send({ t: "config", patch: cfg })}>Apply settings</button>
         </section>
 
+        <section className="space-y-2">
+          <h3 className="label">Table options</h3>
+          <Toggle label="Rabbit hunting" hint="After an early finish, anyone seated can reveal the cards that would have come." checked={view.options.rabbitHunt} onChange={(v) => send({ t: "options", patch: { rabbitHunt: v } })} />
+          <Toggle label="Auto-reveal replays" hint="Show every hole card and equities in replays without a majority vote." checked={view.options.autoUnlockReplays} onChange={(v) => send({ t: "options", patch: { autoUnlockReplays: v } })} />
+        </section>
+
         <section>
           <h3 className="label">Players</h3>
           <ul className="card-surface divide-y divide-border">
@@ -146,12 +153,26 @@ export function HostPanel({ open, onClose, view, send }: { open: boolean; onClos
   );
 }
 
-export function LogChat({ open, onClose, log, chat, send, tab, setTab }: { open: boolean; onClose: () => void; log: LogLine[]; chat: ChatMessage[]; send: (m: ClientMessage) => void; tab: "log" | "chat"; setTab: (t: "log" | "chat") => void }) {
+export type SideTab = "log" | "chat" | "hands";
+
+export function LogChat({ open, onClose, log, chat, send, tab, setTab, hands, records, mySeat }: {
+  open: boolean; onClose: () => void; log: LogLine[]; chat: ChatMessage[]; send: (m: ClientMessage) => void; tab: SideTab; setTab: (t: SideTab) => void;
+  hands: HandSummary[] | null; records: Record<number, HandRecordView>; mySeat: number | null;
+}) {
   const [text, setText] = useState("");
+  const [openHand, setOpenHand] = useState<number | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (open) endRef.current?.scrollIntoView({ block: "end" });
+    if (open && tab !== "hands") endRef.current?.scrollIntoView({ block: "end" });
   }, [open, log.length, chat.length, tab]);
+  useEffect(() => { if (!open) setOpenHand(null); }, [open]);
+  const openReplay = (n: number) => { setOpenHand(n); send({ t: "getHand", number: n }); };
+  // refresh the open record whenever the hands list changes (votes, unlocks)
+  const handsKey = hands ? hands.map((h) => `${h.number}:${h.votes}:${h.unlocked ? 1 : 0}`).join("|") : "";
+  useEffect(() => {
+    if (openHand !== null && hands) send({ t: "getHand", number: openHand });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [handsKey]);
   const submit = (e: FormEvent) => {
     e.preventDefault();
     const t = text.trim();
@@ -160,13 +181,18 @@ export function LogChat({ open, onClose, log, chat, send, tab, setTab }: { open:
     setText("");
   };
   return (
-    <Sheet open={open} onClose={onClose} title={tab === "log" ? "Hand log" : "Chat"} side="right">
+    <Sheet open={open} onClose={onClose} title={tab === "log" ? "Hand log" : tab === "chat" ? "Chat" : openHand !== null ? "Replay" : "Hands"} side="right">
       <div className="flex flex-col h-full min-h-[50dvh]">
-        <div className="grid grid-cols-2 gap-1 p-1 rounded-xl bg-surface-2 mb-3" role="tablist">
-          {(["log", "chat"] as const).map((t) => (
-            <button key={t} role="tab" aria-selected={tab === t} onClick={() => setTab(t)} className={`min-h-[40px] rounded-lg text-sm font-semibold ${tab === t ? "bg-surface-3" : "text-muted"}`}>{t === "log" ? "Log" : "Chat"}</button>
+        <div className="grid grid-cols-3 gap-1 p-1 rounded-xl bg-surface-2 mb-3" role="tablist">
+          {(["log", "chat", "hands"] as const).map((t) => (
+            <button key={t} role="tab" aria-selected={tab === t} onClick={() => { setTab(t); setOpenHand(null); }} className={`min-h-[40px] rounded-lg text-sm font-semibold ${tab === t ? "bg-surface-3" : "text-muted"}`}>{t === "log" ? "Log" : t === "chat" ? "Chat" : "Hands"}</button>
           ))}
         </div>
+        {tab === "hands" ? (
+          <div className="flex-1 overflow-y-auto scroll-thin pb-2 max-h-[70dvh]">
+            {openHand === null ? <HandsList hands={hands} onOpen={openReplay} send={send} /> : <ReplayView rec={records[openHand]} onBack={() => setOpenHand(null)} send={send} mySeat={mySeat} />}
+          </div>
+        ) : (
         <div className="flex-1 overflow-y-auto scroll-thin text-sm space-y-1 pb-2 max-h-[60dvh]">
           {tab === "log"
             ? log.map((l) => (
@@ -177,6 +203,7 @@ export function LogChat({ open, onClose, log, chat, send, tab, setTab }: { open:
               ))}
           <div ref={endRef} />
         </div>
+        )}
         {tab === "chat" && (
           <form onSubmit={submit} className="flex gap-2 pt-2 border-t border-border">
             <input className="input" value={text} onChange={(e) => setText(e.target.value)} placeholder="Say something…" maxLength={300} aria-label="Chat message" />
@@ -208,5 +235,19 @@ export function EndedModal({ results, me }: { results: SessionResultRow[]; me: s
       </table>
       <button className="btn btn-primary w-full" onClick={() => navigate("/")}>Back to lobby</button>
     </Modal>
+  );
+}
+
+function Toggle({ label, hint, checked, onChange }: { label: string; hint: string; checked: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <button type="button" role="switch" aria-checked={checked} onClick={() => onChange(!checked)} className="w-full card-surface p-3 flex items-center gap-3 text-left">
+      <div className="flex-1">
+        <p className="text-sm font-semibold">{label}</p>
+        <p className="text-xs text-muted">{hint}</p>
+      </div>
+      <span className={`relative inline-block w-12 h-7 rounded-full transition-colors ${checked ? "bg-green" : "bg-surface-3"}`} aria-hidden="true">
+        <span className={`absolute top-0.5 w-6 h-6 rounded-full bg-white shadow transition-transform ${checked ? "translate-x-[22px]" : "translate-x-0.5"}`} />
+      </span>
+    </button>
   );
 }

@@ -1,4 +1,4 @@
-import { Bell, BellOff, Link2, MessageSquare, ScrollText, Settings2, User } from "lucide-react";
+import { BarChart3, Bell, BellOff, Link2, MessageSquare, Rabbit, ScrollText, Settings2, User } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Action, PublicSeat, TableView } from "@shared/protocol";
 import { VARIANTS } from "@engine/variants";
@@ -8,7 +8,8 @@ import { Link } from "../lib/router";
 import { PlayingCard } from "../components/Card";
 import { BetChip, SeatView } from "../components/Seat";
 import { ActionBar, DiscardBar } from "../components/ActionBar";
-import { EndedModal, HostPanel, LogChat, PlayerMenu, SitSheet } from "../components/Panels";
+import { EndedModal, HostPanel, LogChat, PlayerMenu, SitSheet, type SideTab } from "../components/Panels";
+import { HudStrip, PlayerSheet } from "../components/Hud";
 import { Toast } from "../components/ui";
 
 /** Seat anchor positions (percent of the table area), index 0 = bottom centre, proceeding clockwise on screen. */
@@ -68,11 +69,14 @@ function useBeep() {
 }
 
 export function TablePage({ code }: { code: string }) {
-  const { view, log, chat, status, error, ended, send, offset, notFound } = useTable(code);
+  const { view, log, chat, status, error, ended, send, offset, notFound, hands, records } = useTable(code);
   const landscape = useMedia("(orientation: landscape) and (min-width: 640px)");
   const [sitSeat, setSitSeat] = useState<number | null>(null);
   const [panel, setPanel] = useState<null | "host" | "me" | "log">(null);
-  const [logTab, setLogTab] = useState<"log" | "chat">("log");
+  const [logTab, setLogTab] = useState<SideTab>("log");
+  const [hudOn, setHudOn] = useState(() => { try { return localStorage.getItem("fp:hud") !== "0"; } catch { return true; } });
+  const toggleHud = () => setHudOn((v) => { try { localStorage.setItem("fp:hud", v ? "0" : "1"); } catch { /* ignore */ } return !v; });
+  const [playerSheet, setPlayerSheet] = useState<number | null>(null);
   const [selectedCard, setSelectedCard] = useState<number | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -181,6 +185,9 @@ export function TablePage({ code }: { code: string }) {
           <Link2 size={13} className="text-dim shrink-0" aria-hidden="true" />
         </button>
         {status !== "open" && <span className="pill pill-red shrink-0">{status === "reconnecting" ? "reconnecting…" : status}</span>}
+        <button className="btn btn-ghost btn-sm px-2" onClick={toggleHud} aria-label={hudOn ? "Hide HUD" : "Show HUD"} aria-pressed={hudOn}>
+          <BarChart3 size={18} className={hudOn ? "text-gold" : ""} />
+        </button>
         <button className="btn btn-ghost btn-sm px-2" onClick={toggle} aria-label={muted ? "Unmute turn alerts" : "Mute turn alerts"} aria-pressed={!muted}>
           {muted ? <BellOff size={18} /> : <Bell size={18} />}
         </button>
@@ -216,6 +223,8 @@ export function TablePage({ code }: { code: string }) {
                 <div className="flex gap-1.5">
                   {Array.from({ length: 5 }, (_, i) => {
                     const c = hand.board[i];
+                    const r = hand.rabbit?.[i - hand.board.length];
+                    if (!c && r) return <div key={r} className="relative"><PlayingCard card={r} size={boardSize} deal dim /><span className="absolute -top-2 left-1/2 -translate-x-1/2 pill text-[9px] px-1.5 py-0"><Rabbit size={10} aria-hidden="true" /></span></div>;
                     return c ? (
                       <PlayingCard key={c} card={c} size={boardSize} deal best={showdown && bottomWinnerSeat?.bestCards?.includes(c)} dim={showdown && !!bottomWinnerSeat?.bestCards && !bottomWinnerSeat.bestCards.includes(c)} />
                     ) : (
@@ -267,6 +276,8 @@ export function TablePage({ code }: { code: string }) {
                     cardSize={seat.seat === mySeat ? myCardSize : otherCardSize}
                     selectable={amDiscarding && seat.seat === mySeat}
                     big={seat.seat === mySeat}
+                    onTap={() => setPlayerSheet(seat.seat)}
+                    extra={hudOn ? <HudStrip counters={view.hud[seat.playerId]} /> : null}
                   />
                 </div>
               ) : (
@@ -280,7 +291,7 @@ export function TablePage({ code }: { code: string }) {
                   {mySeat === null ? "SIT" : ""}
                 </button>
               )}
-              {seat && seat.streetBet > 0 && (
+              {seat && seat.streetBet > 0 && !showdown && (
                 <div className="absolute -translate-x-1/2 -translate-y-1/2" style={{ left: `${betPos.x}%`, top: `${betPos.y}%`, zIndex: 3 }}>
                   <BetChip amount={seat.streetBet} />
                 </div>
@@ -298,7 +309,7 @@ export function TablePage({ code }: { code: string }) {
           ) : amDiscarding ? (
             <DiscardBar selected={selectedCard} count={hand!.pendingDiscard.length} onDiscard={() => selectedCard !== null && act({ type: "discard", amount: selectedCard })} />
           ) : (
-            <StatusBar view={view} onSit={() => setSitSeat(firstEmpty(view.seats))} onStart={() => send({ t: "start" })} />
+            <StatusBar view={view} onSit={() => setSitSeat(firstEmpty(view.seats))} onStart={() => send({ t: "start" })} onRabbit={() => send({ t: "rabbit" })} />
           )}
         </div>
       </div>
@@ -306,7 +317,8 @@ export function TablePage({ code }: { code: string }) {
       <SitSheet open={sitSeat !== null} seat={sitSeat} config={view.config} onClose={() => setSitSeat(null)} onSit={(seat, buyIn) => { send({ t: "sit", seat, buyIn }); setSitSeat(null); }} />
       <HostPanel open={panel === "host"} onClose={() => setPanel(null)} view={view} send={send} />
       <PlayerMenu open={panel === "me"} onClose={() => setPanel(null)} view={view} send={send} />
-      <LogChat open={panel === "log"} onClose={() => setPanel(null)} log={log} chat={chat} send={send} tab={logTab} setTab={setLogTab} />
+      <LogChat open={panel === "log"} onClose={() => setPanel(null)} log={log} chat={chat} send={send} tab={logTab} setTab={setLogTab} hands={hands} records={records} mySeat={mySeat} />
+      <PlayerSheet seat={playerSheet !== null ? view.seats[playerSheet] ?? null : null} session={playerSheet !== null ? view.hud[view.seats[playerSheet]?.playerId ?? ""] : undefined} onClose={() => setPlayerSheet(null)} />
       {ended && <EndedModal results={ended} me={view.me.userId} />}
     </div>
   );
@@ -341,7 +353,7 @@ function CenterStatus({ view, landscape }: { view: TableView; landscape: boolean
   return <p className={`text-xs font-semibold text-center ${tone} ${landscape ? "text-sm" : ""} bg-black/40 rounded-full px-3 py-1 anim-fade-up`} key={text}>{text}</p>;
 }
 
-function StatusBar({ view, onSit, onStart }: { view: TableView; onSit: () => void; onStart: () => void }) {
+function StatusBar({ view, onSit, onStart, onRabbit }: { view: TableView; onSit: () => void; onStart: () => void; onRabbit: () => void }) {
   const hand = view.hand;
   const mySeat = view.me.seat !== null ? view.seats[view.me.seat] : null;
   const players = view.seats.filter(Boolean).length;
@@ -368,10 +380,11 @@ function StatusBar({ view, onSit, onStart }: { view: TableView; onSit: () => voi
     const a = hand.actor !== null ? view.seats[hand.actor] : null;
     text = a ? `Waiting for ${a.name}…` : "Hand in progress.";
   }
+  if (hand?.rabbitAvailable && !action) action = { label: "Rabbit hunt", onClick: onRabbit, cls: "" };
   return (
     <div className="card-surface px-4 py-3 flex items-center gap-3 min-h-[56px]">
       <p className="text-sm text-muted flex-1">{text}</p>
-      {action && <button className={`btn btn-sm ${action.cls}`} onClick={action.onClick}>{action.label}</button>}
+      {action && <button className={`btn btn-sm ${action.cls}`} onClick={action.onClick}>{action.label === "Rabbit hunt" && <Rabbit size={16} aria-hidden="true" />}{action.label}</button>}
     </div>
   );
 }

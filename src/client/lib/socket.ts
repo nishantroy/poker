@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ChatMessage, ClientMessage, LogLine, ServerMessage, SessionResultRow, TableView } from "@shared/protocol";
+import type { ChatMessage, ClientMessage, HandRecordView, HandSummary, LogLine, ServerMessage, SessionResultRow, TableView } from "@shared/protocol";
 
 export type ConnStatus = "connecting" | "open" | "reconnecting" | "closed";
 
@@ -14,6 +14,8 @@ export interface TableConn {
   /** estimated server clock offset: serverTime - Date.now() */
   offset: number;
   notFound: boolean;
+  hands: HandSummary[] | null;
+  records: Record<number, HandRecordView>;
 }
 
 const MAX_LOG = 300;
@@ -27,6 +29,8 @@ export function useTable(code: string): TableConn {
   const [ended, setEnded] = useState<SessionResultRow[] | null>(null);
   const [offset, setOffset] = useState(0);
   const [notFound, setNotFound] = useState(false);
+  const [hands, setHands] = useState<HandSummary[] | null>(null);
+  const [records, setRecords] = useState<Record<number, HandRecordView>>({});
   const wsRef = useRef<WebSocket | null>(null);
   const attempts = useRef(0);
   const closedByUs = useRef(false);
@@ -89,6 +93,12 @@ export function useTable(code: string): TableConn {
           case "ended":
             setEnded(m.results);
             break;
+          case "hands":
+            setHands(m.hands);
+            break;
+          case "hand":
+            setRecords((prev) => ({ ...prev, [m.hand.number]: m.hand }));
+            break;
           case "pong":
             setOffset(m.serverTime - Date.now());
             break;
@@ -143,5 +153,5 @@ export function useTable(code: string): TableConn {
     };
   }, [code]);
 
-  return { view, log, chat, status, error, ended, send, offset, notFound };
+  return { view, log, chat, status, error, ended, send, offset, notFound, hands, records };
 }

@@ -1,5 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
-import type { LeaderboardRow, SessionResultRow, TableStatus, TableSummary, UserInfo, UserStats, Variant } from "@shared/protocol";
+import type { HudCounters, HudRow, LeaderboardRow, SessionResultRow, TableStatus, TableSummary, UserInfo, UserStats, Variant } from "@shared/protocol";
+import { emptyHud } from "@engine/hud";
 import { LIMITS } from "@shared/protocol";
 import { type Env, SESSION_TTL_MS, hashPin, randomToken, timingSafeEqual } from "./env";
 
@@ -48,6 +49,22 @@ CREATE TABLE IF NOT EXISTS tables (
   players INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS hud (
+  user_id TEXT PRIMARY KEY,
+  hands INTEGER NOT NULL DEFAULT 0,
+  vpip INTEGER NOT NULL DEFAULT 0,
+  pfr INTEGER NOT NULL DEFAULT 0,
+  three_bet INTEGER NOT NULL DEFAULT 0,
+  agg_bets INTEGER NOT NULL DEFAULT 0,
+  agg_calls INTEGER NOT NULL DEFAULT 0,
+  saw_flop INTEGER NOT NULL DEFAULT 0,
+  wtsd INTEGER NOT NULL DEFAULT 0,
+  wsd INTEGER NOT NULL DEFAULT 0,
+  won INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS hud_applied (
+  table_code TEXT PRIMARY KEY
 );
 CREATE TABLE IF NOT EXISTS table_members (
   code TEXT NOT NULL,
@@ -178,6 +195,41 @@ export class AccountsDO extends DurableObject<Env> {
 
   // ---------- results ----------
 
+  /** Add a session's HUD counters to lifetime totals. Idempotent per table. */
+  async recordHud(tableCode: string, hud: Record<string, HudCounters>): Promise<void> {
+    const done = this.sql.exec("SELECT 1 FROM hud_applied WHERE table_code = ?", tableCode).toArray().length > 0;
+    if (done) return;
+    this.sql.exec("INSERT INTO hud_applied (table_code) VALUES (?)", tableCode);
+    for (const [userId, c] of Object.entries(hud)) {
+      this.sql.exec(
+        `INSERT INTO hud (user_id, hands, vpip, pfr, three_bet, agg_bets, agg_calls, saw_flop, wtsd, wsd, won)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(user_id) DO UPDATE SET hands = hands + excluded.hands, vpip = vpip + excluded.vpip, pfr = pfr + excluded.pfr,
+           three_bet = three_bet + excluded.three_bet, agg_bets = agg_bets + excluded.agg_bets, agg_calls = agg_calls + excluded.agg_calls,
+           saw_flop = saw_flop + excluded.saw_flop, wtsd = wtsd + excluded.wtsd, wsd = wsd + excluded.wsd, won = won + excluded.won`,
+        userId, c.hands, c.vpip, c.pfr, c.threeBet, c.aggBets, c.aggCalls, c.sawFlop, c.wtsd, c.wsd, c.won,
+      );
+    }
+  }
+
+  private hudRow(userId: string): HudCounters {
+    const r = this.sql.exec<{ hands: number; vpip: number; pfr: number; three_bet: number; agg_bets: number; agg_calls: number; saw_flop: number; wtsd: number; wsd: number; won: number }>(
+      "SELECT hands, vpip, pfr, three_bet, agg_bets, agg_calls, saw_flop, wtsd, wsd, won FROM hud WHERE user_id = ?", userId,
+    ).toArray()[0];
+    if (!r) return emptyHud();
+    return { hands: r.hands, vpip: r.vpip, pfr: r.pfr, threeBet: r.three_bet, aggBets: r.agg_bets, aggCalls: r.agg_calls, sawFlop: r.saw_flop, wtsd: r.wtsd, wsd: r.wsd, won: r.won };
+  }
+
+  async hud(userIds: string[]): Promise<HudRow[]> {
+    const out: HudRow[] = [];
+    for (const id of userIds.slice(0, 16)) {
+      const u = this.sql.exec<{ username: string }>("SELECT username FROM users WHERE id = ?", id).toArray()[0];
+      if (!u) continue;
+      out.push({ userId: id, username: u.username, counters: this.hudRow(id) });
+    }
+    return out;
+  }
+
   async recordResults(tableCode: string, tableName: string, rows: SessionResultRow[], endedAt: number): Promise<void> {
     for (const r of rows) {
       this.sql.exec(
@@ -214,7 +266,7 @@ export class AccountsDO extends DurableObject<Env> {
     ).toArray();
     return {
       userId, username: user.username, net: agg.net ?? 0, sessions: agg.sessions, hands: agg.hands ?? 0,
-      biggestPot: agg.biggest_pot ?? 0, wins: agg.wins ?? 0, bestSession: agg.best ?? 0, worstSession: agg.worst ?? 0,
+      biggestPot: agg.biggest_pot ?? 0, wins: agg.wins ?? 0, bestSession: agg.best ?? 0, worstSession: agg.worst ?? 0, hud: this.hudRow(userId),
       recent: recent.map((r) => ({ tableCode: r.table_code, tableName: r.table_name, net: r.net, buyIn: r.buy_in, cashOut: r.cash_out, hands: r.hands_played, endedAt: r.ended_at })),
     };
   }

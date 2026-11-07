@@ -1,8 +1,46 @@
 import type { Card } from "@engine/cards";
 import type { Variant } from "@engine/variants";
 import type { Action, ActionLimits, HandResult, Phase, Street, TableConfig } from "@engine/types";
+import type { HandRecord, HudCounters } from "@engine/hud";
 
-export type { Card, Variant, Action, ActionLimits, HandResult, Phase, Street, TableConfig };
+export type { Card, Variant, Action, ActionLimits, HandResult, Phase, Street, TableConfig, HandRecord, HudCounters };
+
+/** Table-level options that the engine does not care about. */
+export interface TableOptions {
+  /** Anyone at the table may reveal the undealt board cards after an early finish. */
+  rabbitHunt: boolean;
+  /** Replays reveal every hole card without a vote. */
+  autoUnlockReplays: boolean;
+}
+
+export const defaultOptions = (): TableOptions => ({ rabbitHunt: true, autoUnlockReplays: false });
+
+export interface HandSummary {
+  number: number;
+  variant: Variant;
+  pot: number;
+  winners: string[];
+  board: Card[];
+  endedAt: number;
+  /** Everyone's cards and equities may be shown. */
+  unlocked: boolean;
+  votes: number;
+  votesNeeded: number;
+  /** The viewer has already voted. */
+  voted: boolean;
+  /** The viewer was dealt into this hand (and so may vote). */
+  eligible: boolean;
+}
+
+/** A hand record as seen by one viewer: hidden hole cards are null entries. */
+export type HandRecordView = Omit<HandRecord, "players"> & {
+  players: (Omit<HandRecord["players"][number], "hole" | "discarded"> & { hole: (Card | null)[]; discarded: (Card | null)[] })[];
+  unlocked: boolean;
+  votes: number;
+  votesNeeded: number;
+  voted: boolean;
+  eligible: boolean;
+};
 
 export type TableStatus = "waiting" | "running" | "paused" | "ended";
 
@@ -58,6 +96,10 @@ export interface PublicHand {
   button: number;
   smallBlindSeat: number;
   bigBlindSeat: number;
+  /** Undealt board cards revealed by a rabbit hunt (showdown only). */
+  rabbit: Card[] | null;
+  /** A rabbit hunt is possible for this hand (ended early, option on, not yet revealed). */
+  rabbitAvailable: boolean;
 }
 
 export interface RebuyRequest {
@@ -79,6 +121,9 @@ export interface TableView {
   hand: PublicHand | null;
   timer: TimerInfo | null;
   rebuyRequests: RebuyRequest[];
+  options: TableOptions;
+  /** Session HUD counters per userId (everyone currently seated, plus departed players). */
+  hud: Record<string, HudCounters>;
   me: {
     userId: string;
     seat: number | null;
@@ -130,6 +175,11 @@ export type ClientMessage =
   | { t: "approveRebuy"; playerId: string; approve: boolean }
   | { t: "config"; patch: Partial<TableConfig> }
   | { t: "end" }
+  | { t: "options"; patch: Partial<TableOptions> }
+  | { t: "rabbit" }
+  | { t: "listHands" }
+  | { t: "getHand"; number: number }
+  | { t: "vote"; number: number }
   | { t: "ping" };
 
 // ----- server -> client -----
@@ -139,6 +189,8 @@ export type ServerMessage =
   | { t: "chat"; messages: ChatMessage[] }
   | { t: "error"; code: string; message: string }
   | { t: "ended"; results: SessionResultRow[] }
+  | { t: "hands"; hands: HandSummary[] }
+  | { t: "hand"; hand: HandRecordView }
   | { t: "pong"; serverTime: number };
 
 // ----- REST -----
@@ -158,7 +210,14 @@ export interface LeaderboardRow {
   wins: number;
 }
 
+export interface HudRow {
+  userId: string;
+  username: string;
+  counters: HudCounters;
+}
+
 export interface UserStats extends LeaderboardRow {
+  hud: HudCounters;
   bestSession: number;
   worstSession: number;
   recent: { tableCode: string; tableName: string; net: number; buyIn: number; cashOut: number; hands: number; endedAt: number }[];

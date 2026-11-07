@@ -23,7 +23,7 @@ export function TimerRing({ timer, offset, size = 66 }: { timer: TimerInfo; offs
   );
 }
 
-export function SeatView({ seat, isMe, acting, timer, offset, isButton, isWinner, winAmount, showdown, selectedCard, onSelectCard, cardSize, selectable, big }: {
+export function SeatView({ seat, isMe, acting, timer, offset, isButton, isWinner, winAmount, showdown, selectedCard, onSelectCard, cardSize, selectable, big, onTap, extra }: {
   seat: PublicSeat;
   isMe: boolean;
   acting: boolean;
@@ -38,6 +38,8 @@ export function SeatView({ seat, isMe, acting, timer, offset, isButton, isWinner
   cardSize: number;
   selectable: boolean;
   big: boolean;
+  onTap?: () => void;
+  extra?: React.ReactNode;
 }) {
   const out = seat.status === "sittingOut" || (!seat.inHand && seat.stack === 0);
   const cards = seat.cards ?? [];
@@ -45,6 +47,7 @@ export function SeatView({ seat, isMe, acting, timer, offset, isButton, isWinner
   const showCards = cards.length > 0 && !(seat.folded && !isMe);
   return (
     <div className={`flex flex-col items-center ${seat.folded ? "opacity-80" : ""}`} style={{ width: big ? 140 : 96 }}>
+      {big && isWinner && winAmount > 0 && <span className="mb-1 pill pill-gold anim-pop num">+{fmtChips(winAmount)}</span>}
       {showCards && (
         <div className={`flex ${big ? "-space-x-2 mb-1" : "-space-x-3 mb-[-14px]"} ${seat.folded ? "opacity-40" : ""}`} style={{ zIndex: 1 }}>
           {cards.map((c, i) => (
@@ -59,7 +62,7 @@ export function SeatView({ seat, isMe, acting, timer, offset, isButton, isWinner
         </div>
       )}
       <div className="relative" style={{ zIndex: 2 }}>
-        <div className={`seat-avatar ${isMe ? "me" : ""} ${acting ? "acting" : ""} ${seat.folded ? "folded" : ""} ${out ? "out" : ""} ${isWinner ? "winner-glow" : ""}`} aria-label={`${seat.name}${isMe ? " (you)" : ""}`}>
+        <button type="button" onClick={onTap} className={`seat-avatar ${isMe ? "me" : ""} ${acting ? "acting" : ""} ${seat.folded ? "folded" : ""} ${out ? "out" : ""} ${isWinner ? "winner-glow" : ""}`} aria-label={`${seat.name}${isMe ? " (you)" : ""} — stats`}>
           {initials(seat.name)}
           {acting && timer && <TimerRing timer={timer} offset={offset} />}
           {seat.disconnected && (
@@ -67,7 +70,7 @@ export function SeatView({ seat, isMe, acting, timer, offset, isButton, isWinner
               <WifiOff size={12} aria-label="Disconnected" />
             </span>
           )}
-        </div>
+        </button>
         {isButton && (
           <span className="absolute -left-3 bottom-0 w-6 h-6 rounded-full bg-white text-black text-[11px] font-black flex items-center justify-center shadow-pop" aria-label="Dealer button">D</span>
         )}
@@ -78,7 +81,8 @@ export function SeatView({ seat, isMe, acting, timer, offset, isButton, isWinner
           {seat.allIn && seat.inHand && !showdown ? "ALL-IN" : fmtChips(seat.stack)}
         </p>
       </div>
-      {isWinner && winAmount > 0 && (
+      {!big && extra}
+      {!big && isWinner && winAmount > 0 && (
         <span className="mt-1 pill pill-gold anim-pop num">+{fmtChips(winAmount)}</span>
       )}
       {showdown && seat.handName && !seat.folded && !big && (
