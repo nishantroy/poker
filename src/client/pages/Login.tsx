@@ -78,7 +78,7 @@ export function LoginPage() {
             { icon: <Ghost size={18} aria-hidden="true" />, text: "Ghost seats & Squid boards" },
           ].map((f, i) => (
             <li key={i} className="rounded-xl border border-border bg-surface/60 px-2 py-3 text-[11px] leading-snug text-muted flex flex-col items-center gap-1.5">
-              <span className="text-gold">{f.icon}</span>{f.text}
+              <span className="text-brand">{f.icon}</span>{f.text}
             </li>
           ))}
         </ul>
@@ -88,13 +88,28 @@ export function LoginPage() {
 }
 
 export function Logo({ size = 44 }: { size?: number }) {
+  // Bink City mark: a neon chip ring around a three-tower skyline.
   return (
     <svg width={size} height={size} viewBox="0 0 64 64" aria-hidden="true">
-      <rect width="64" height="64" rx="16" fill="#131b2e" stroke="rgba(255,255,255,0.1)" />
-      <circle cx="32" cy="32" r="19" fill="#e8b033" />
-      <circle cx="32" cy="32" r="19" fill="none" stroke="#0b1120" strokeWidth="3" strokeDasharray="7 6.9" />
-      <circle cx="32" cy="32" r="11" fill="#0b1120" />
-      <path d="M32 24.5c-2.4-3.4-7.5-1-6 3 1.1 2.8 4.4 4.4 6 7 1.6-2.6 4.9-4.2 6-7 1.5-4-3.6-6.4-6-3z" fill="#e8b033" />
+      <defs>
+        <linearGradient id="bc-ring" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor="#ff6aa0" />
+          <stop offset="0.55" stopColor="#ff3d81" />
+          <stop offset="1" stopColor="#8b5cf6" />
+        </linearGradient>
+        <linearGradient id="bc-tower" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="#c4b5fd" />
+          <stop offset="1" stopColor="#8b5cf6" />
+        </linearGradient>
+      </defs>
+      <rect width="64" height="64" rx="16" fill="#151226" stroke="rgba(255,255,255,0.1)" />
+      <circle cx="32" cy="32" r="22" fill="none" stroke="url(#bc-ring)" strokeWidth="5.5" strokeDasharray="9 5.3" strokeDashoffset="2" />
+      <circle cx="32" cy="32" r="17" fill="#0c0a16" />
+      <rect x="20" y="31" width="7" height="13" rx="1" fill="url(#bc-tower)" />
+      <rect x="29" y="23" width="7" height="21" rx="1" fill="#ff3d81" />
+      <rect x="38" y="35" width="7" height="9" rx="1" fill="url(#bc-tower)" />
+      <rect x="31.5" y="19" width="2" height="4" fill="#ff6aa0" />
+      <circle cx="40.5" cy="24.5" r="1.6" fill="#ffe08a" />
     </svg>
   );
 }

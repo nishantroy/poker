@@ -52,6 +52,10 @@ The first deploy creates the two Durable Object classes via the `v1` migration i
 - **Taunts**: a smiley button sends one of 12 canned taunts as a speech bubble over your seat for a few seconds (one every 6 seconds).
 - **Sounds**: synthesised chips, cards, all-in, win, Squid elimination, ghost entrance and bad-beat womp via WebAudio; mute per device with the bell.
 
+## Design
+
+OLED-dark ink/plum base with a "bink" pink brand accent and violet secondary; gold is reserved for chips, stacks and pots so money always reads as money. Display face is Bricolage Grotesque, body is DM Sans (Google Fonts, `display=swap`, preconnected). The mark is a neon chip ring around a three-tower skyline (`Logo` in `src/client/pages/Login.tsx`, favicon inline in `index.html`). App name and tagline live in `src/shared/brand.ts`.
+
 ## Feature flags (kill switches)
 
 Every optional feature has an operator flag in `src/shared/flags.ts` (HUD, replays, replay equities, rabbit hunting, chat, Omaha/Pineapple variants, leaderboard, signups, creating tables, sounds, ghost player, multi-board/Squid Game, bad beat splash, taunts). All default to on. Admins see a **Feature flags** section on their profile page; flipping one is stored in `AccountsDO` and pushed to every open table at once, so a misbehaving feature can be switched off mid-session without a redeploy. Server-enforced flags also reject the underlying messages/API calls, not just hide the UI.

@@ -91,7 +91,7 @@ function GhostVote({ view, send }: { view: TableView; send: (m: ClientMessage) =
   return (
     <div className="card-surface p-3 space-y-2">
       <div className="flex items-start gap-2">
-        <span className="anim-ghost text-gold mt-0.5" aria-hidden="true"><Ghost size={22} /></span>
+        <span className="anim-ghost text-violet mt-0.5" aria-hidden="true"><Ghost size={22} /></span>
         <div className="flex-1">
           <p className="font-semibold text-sm">Ghost player {g.enabled ? <span className="pill pill-green ml-1">in play</span> : <span className="pill ml-1">off</span>}</p>
           <p className="text-xs text-muted">A ghost is dealt in every hand but never bets. It always sees showdown and can only win there. When it wins, its whole stack rides as dead money in the next main pot.</p>
@@ -252,7 +252,7 @@ export function LogChat({ open, onClose, log, chat, send, tab, setTab, hands, re
                 <p key={l.id} className={`leading-snug ${l.kind === "result" ? "text-gold-bright font-semibold" : l.kind === "street" ? "text-blue font-semibold" : l.kind === "system" ? "text-dim" : "text-muted"}`}>{l.text}</p>
               ))
             : chat.map((m) => (
-                <p key={m.id} className="leading-snug"><span className="font-bold text-gold-bright">{m.name}</span> <span className="text-text">{m.text}</span></p>
+                <p key={m.id} className="leading-snug"><span className="font-bold text-violet">{m.name}</span> <span className="text-text">{m.text}</span></p>
               ))}
           <div ref={endRef} />
         </div>
@@ -293,7 +293,7 @@ export function EndedModal({ results, me }: { results: SessionResultRow[]; me: s
         </thead>
         <tbody>
           {results.map((r) => (
-            <tr key={r.userId} className={`border-t border-border ${r.userId === me ? "bg-gold/10" : ""}`}>
+            <tr key={r.userId} className={`border-t border-border ${r.userId === me ? "bg-brand/10" : ""}`}>
               <td className="py-2 font-semibold">{r.name}</td>
               <td className="py-2 text-right text-muted num">{r.buyIn.toLocaleString()}</td>
               <td className="py-2 text-right text-muted num">{r.cashOut.toLocaleString()}</td>

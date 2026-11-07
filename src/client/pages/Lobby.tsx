@@ -75,7 +75,7 @@ export function LobbyPage() {
           <div className="skeleton h-16 rounded-2xl" />
         ) : tables.length === 0 ? (
           <div className="card-surface p-5 flex items-center gap-4">
-            <span className="w-11 h-11 rounded-full bg-surface-2 border border-border flex items-center justify-center text-gold shrink-0"><LayoutGrid size={20} aria-hidden="true" /></span>
+            <span className="w-11 h-11 rounded-full bg-surface-2 border border-border flex items-center justify-center text-brand shrink-0"><LayoutGrid size={20} aria-hidden="true" /></span>
             <div>
               <p className="font-semibold text-sm">No open tables yet</p>
               <p className="text-muted text-sm">Create one, then share the link or the 6-letter code. Tables disappear from here 3 days after the session ends.</p>
@@ -107,7 +107,7 @@ export function LobbyPage() {
           <div className="skeleton h-32 rounded-2xl" />
         ) : board.length === 0 ? (
           <div className="card-surface p-5 flex items-center gap-4">
-            <span className="w-11 h-11 rounded-full bg-surface-2 border border-border flex items-center justify-center text-gold shrink-0"><Trophy size={20} aria-hidden="true" /></span>
+            <span className="w-11 h-11 rounded-full bg-surface-2 border border-border flex items-center justify-center text-brand shrink-0"><Trophy size={20} aria-hidden="true" /></span>
             <div>
               <p className="font-semibold text-sm">Nobody on the board yet</p>
               <p className="text-muted text-sm">When the host ends a session, everyone's net result lands here.</p>
@@ -127,7 +127,7 @@ export function LobbyPage() {
               </thead>
               <tbody>
                 {board.map((r, i) => (
-                  <tr key={r.userId} className={`border-b border-border last:border-0 ${r.userId === user?.id ? "bg-gold/10" : ""}`}>
+                  <tr key={r.userId} className={`border-b border-border last:border-0 ${r.userId === user?.id ? "bg-brand/10" : ""}`}>
                     <td className="px-3 py-2.5 text-muted">{i === 0 ? <Crown size={16} className="text-gold" aria-label="First place" /> : i + 1}</td>
                     <td className="px-3 py-2.5 font-semibold">{r.username}</td>
                     <td className={`px-3 py-2.5 text-right font-bold num ${r.net > 0 ? "text-green-bright" : r.net < 0 ? "text-[#ff8b8e]" : "text-muted"}`}>{fmtNet(r.net)}</td>

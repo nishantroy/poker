@@ -27,7 +27,7 @@ export function App() {
   if (loading) {
     return (
       <div className="min-h-full flex items-center justify-center">
-        <div className="w-10 h-10 rounded-full border-2 border-gold border-t-transparent animate-spin" aria-label="Loading" />
+        <div className="w-10 h-10 rounded-full border-2 border-brand border-t-transparent animate-spin" aria-label="Loading" />
       </div>
     );
   }

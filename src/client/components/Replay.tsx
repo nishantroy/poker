@@ -79,7 +79,7 @@ export function ReplayView({ rec, onBack, send, mySeat, equityOn = true }: { rec
 
       {locked ? (
         <div className="card-surface p-3 flex items-start gap-3">
-          <Lock size={18} className="text-gold shrink-0 mt-0.5" aria-hidden="true" />
+          <Lock size={18} className="text-brand shrink-0 mt-0.5" aria-hidden="true" />
           <div className="flex-1">
             <p className="text-sm font-semibold">Hidden cards and equities are locked</p>
             <p className="text-xs text-muted">A majority of the {rec.players.length} players dealt in must agree to reveal them. {rec.votes}/{rec.votesNeeded} votes so far.</p>

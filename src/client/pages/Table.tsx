@@ -193,7 +193,7 @@ export function TablePage({ code }: { code: string }) {
   if (!view) {
     return (
       <div className="min-h-full flex flex-col items-center justify-center gap-3 text-muted">
-        <div className="w-10 h-10 rounded-full border-2 border-gold border-t-transparent animate-spin" />
+        <div className="w-10 h-10 rounded-full border-2 border-brand border-t-transparent animate-spin" />
         <p>{status === "reconnecting" ? "Reconnecting…" : "Joining table…"}</p>
         {status === "closed" && <Link to="/" className="btn">Back to lobby</Link>}
       </div>
@@ -241,7 +241,7 @@ export function TablePage({ code }: { code: string }) {
         {status !== "open" && <span className="pill pill-red shrink-0">{status === "reconnecting" ? "reconnecting…" : status}</span>}
         {flags.hud && (
           <button className="btn btn-ghost btn-sm px-2" onClick={toggleHud} aria-label={hudOn ? "Hide HUD" : "Show HUD"} aria-pressed={hudOn}>
-            <BarChart3 size={18} className={hudOn ? "text-gold" : ""} />
+            <BarChart3 size={18} className={hudOn ? "text-brand" : ""} />
           </button>
         )}
         {flags.sounds && (
@@ -251,12 +251,12 @@ export function TablePage({ code }: { code: string }) {
         )}
         <button className="btn btn-ghost btn-sm px-2 relative" onClick={() => setPanel("log")} aria-label={flags.chat ? "Log and chat" : "Hand log"}>
           {unreadChat > 0 && flags.chat ? <MessageSquare size={18} /> : <ScrollText size={18} />}
-          {unreadChat > 0 && flags.chat && <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 rounded-full bg-gold text-on-gold text-[10px] font-black flex items-center justify-center">{unreadChat}</span>}
+          {unreadChat > 0 && flags.chat && <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 rounded-full bg-brand text-on-brand text-[10px] font-black flex items-center justify-center">{unreadChat}</span>}
         </button>
         <button className="btn btn-ghost btn-sm px-2" onClick={() => setPanel("me")} aria-label="Your options"><User size={18} /></button>
         {view.me.isHost && (
           <button className="btn btn-ghost btn-sm px-2 relative" onClick={() => setPanel("host")} aria-label="Host controls">
-            <Settings2 size={18} className="text-gold" />
+            <Settings2 size={18} className="text-brand" />
             {view.rebuyRequests.length > 0 && <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-red" />}
           </button>
         )}
@@ -334,7 +334,7 @@ export function TablePage({ code }: { code: string }) {
         {Array.from({ length: n }, (_, seatNo) => {
           const p = pos[(seatNo - rot + n) % n]!;
           const seat = view.seats[seatNo];
-          const betPos = { x: 50 + (p.x - 50) * 0.64, y: 50 + (p.y - 50) * 0.6 };
+          const betPos = { x: 50 + (p.x - 50) * 0.7, y: 50 + (p.y - 50) * 0.66 };
           return (
             <div key={seatNo}>
               {seat ? (
@@ -460,7 +460,7 @@ function CenterStatus({ view, landscape }: { view: TableView; landscape: boolean
   } else if (hand.actor !== null) {
     const a = view.seats[hand.actor];
     text = hand.actor === view.me.seat ? "Your turn" : `${a?.name ?? ""} to act`;
-    if (hand.actor === view.me.seat) tone = "text-gold-bright";
+    if (hand.actor === view.me.seat) tone = "text-brand-bright";
   }
   if (!text) return null;
   return <p className={`text-xs font-semibold text-center ${tone} ${landscape ? "text-sm" : ""} bg-black/40 rounded-full px-3 py-1 anim-fade-up`} key={text}>{text}</p>;
