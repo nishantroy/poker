@@ -11,7 +11,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "deploy": "npm run build && wrangler deploy",
-    "types": "wrangler types"
+    "types": "wrangler types",
+    "smoke": "node scripts/smoke.mjs"
   },
   "dependencies": {
     "lucide-react": "1.70.0",

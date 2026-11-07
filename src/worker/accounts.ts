@@ -167,8 +167,8 @@ export class AccountsDO extends DurableObject<Env> {
       small_blind: number; big_blind: number; players: number; created_at: number;
     }>(
       `SELECT t.* FROM tables t JOIN table_members m ON m.code = t.code
-       WHERE m.user_id = ? AND t.status != 'ended' ORDER BY t.updated_at DESC LIMIT 20`,
-      userId,
+       WHERE m.user_id = ? AND t.status != 'ended' AND t.updated_at > ? ORDER BY t.updated_at DESC LIMIT 20`,
+      userId, Date.now() - 3 * 24 * 60 * 60 * 1000,
     ).toArray();
     return rows.map((r) => ({
       code: r.code, name: r.name, status: r.status, hostId: r.host_id, hostName: r.host_name, variant: r.variant,
