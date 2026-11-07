@@ -43,8 +43,8 @@ export function LobbyPage() {
       <Toast message={toast} />
       <header className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-2.5 min-w-0">
-          <Logo size={34} />
-          <h1 className="text-lg font-extrabold tracking-tight whitespace-nowrap truncate" style={{ fontFamily: "var(--font-display)" }}>{APP_NAME}</h1>
+          <Logo size={30} />
+          <h1 className="text-base font-semibold tracking-tight whitespace-nowrap truncate">{APP_NAME}</h1>
         </div>
         <div className="flex items-center gap-1 shrink-0">
           <Link to="/profile" className="btn btn-ghost btn-sm" aria-label={`Profile: ${user?.username ?? ""}`}>
@@ -56,7 +56,7 @@ export function LobbyPage() {
 
       <section className="grid gap-3 sm:grid-cols-2 mb-8 anim-fade-up">
         {flags.createTables ? (
-          <button className="btn btn-primary min-h-[64px] text-base" onClick={() => setCreate(true)}>
+          <button className="btn btn-primary min-h-[56px] text-base" onClick={() => setCreate(true)}>
             <Plus size={20} aria-hidden="true" /> Create a table
           </button>
         ) : (
@@ -65,7 +65,7 @@ export function LobbyPage() {
         <form onSubmit={join} className="flex gap-2">
           <input className="input uppercase tracking-[0.2em] font-bold" placeholder="JOIN CODE" value={code} aria-label="Table code"
             onChange={(e) => setCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8))} autoCapitalize="characters" autoCorrect="off" spellCheck={false} />
-          <button className="btn btn-green px-5" disabled={code.length < 4} aria-label="Join table"><ArrowRight size={20} /></button>
+          <button className="btn px-5" disabled={code.length < 4} aria-label="Join table"><ArrowRight size={20} /></button>
         </form>
       </section>
 
@@ -75,7 +75,7 @@ export function LobbyPage() {
           <div className="skeleton h-16 rounded-2xl" />
         ) : tables.length === 0 ? (
           <div className="card-surface p-5 flex items-center gap-4">
-            <span className="w-11 h-11 rounded-full bg-surface-2 border border-border flex items-center justify-center text-brand shrink-0"><LayoutGrid size={20} aria-hidden="true" /></span>
+            <span className="w-11 h-11 rounded-full bg-surface-2 border border-border flex items-center justify-center text-muted shrink-0"><LayoutGrid size={20} aria-hidden="true" /></span>
             <div>
               <p className="font-semibold text-sm">No open tables yet</p>
               <p className="text-muted text-sm">Create one, then share the link or the 6-letter code. Tables disappear from here 3 days after the session ends.</p>
@@ -107,7 +107,7 @@ export function LobbyPage() {
           <div className="skeleton h-32 rounded-2xl" />
         ) : board.length === 0 ? (
           <div className="card-surface p-5 flex items-center gap-4">
-            <span className="w-11 h-11 rounded-full bg-surface-2 border border-border flex items-center justify-center text-brand shrink-0"><Trophy size={20} aria-hidden="true" /></span>
+            <span className="w-11 h-11 rounded-full bg-surface-2 border border-border flex items-center justify-center text-muted shrink-0"><Trophy size={20} aria-hidden="true" /></span>
             <div>
               <p className="font-semibold text-sm">Nobody on the board yet</p>
               <p className="text-muted text-sm">When the host ends a session, everyone's net result lands here.</p>

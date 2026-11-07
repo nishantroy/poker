@@ -54,7 +54,7 @@ The first deploy creates the two Durable Object classes via the `v1` migration i
 
 ## Design
 
-OLED-dark ink/plum base with a "bink" pink brand accent and violet secondary; gold is reserved for chips, stacks and pots so money always reads as money. Display face is Bricolage Grotesque, body is DM Sans (Google Fonts, `display=swap`, preconnected). The mark is a neon chip ring around a three-tower skyline (`Logo` in `src/client/pages/Login.tsx`, favicon inline in `index.html`). App name and tagline live in `src/shared/brand.ts`.
+Minimalism & Swiss direction from ui-ux-pro-max: near-black monochrome base, hairline borders, white primary actions, and one warm accent (amber) reserved for chips, stacks, pots, the clock and "your turn". Inter throughout (Google Fonts, `display=swap`). The mark is a monochrome four-notch chip with an amber centre (`Logo` in `src/client/pages/Login.tsx`, favicon inline in `index.html`). App name and tagline live in `src/shared/brand.ts`. No gradients, glows or neon.
 
 ## Feature flags (kill switches)
 

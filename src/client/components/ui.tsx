@@ -12,7 +12,7 @@ export function Sheet({ open, onClose, title, children, side = "bottom" }: { ope
   const panelCls =
     side === "right"
       ? "absolute right-0 top-0 h-full w-full max-w-md anim-fade-up"
-      : "absolute left-0 right-0 bottom-0 max-h-[88dvh] rounded-t-3xl anim-slide-up mx-auto max-w-2xl";
+      : "absolute left-0 right-0 bottom-0 max-h-[88dvh] rounded-t-2xl anim-slide-up mx-auto max-w-2xl";
   return (
     <div className="fixed inset-0 z-50" role="dialog" aria-modal="true" aria-label={title}>
       <button className="absolute inset-0 bg-black/60 backdrop-blur-[2px]" aria-label="Close" onClick={onClose} />

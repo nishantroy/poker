@@ -241,7 +241,7 @@ export function TablePage({ code }: { code: string }) {
         {status !== "open" && <span className="pill pill-red shrink-0">{status === "reconnecting" ? "reconnecting…" : status}</span>}
         {flags.hud && (
           <button className="btn btn-ghost btn-sm px-2" onClick={toggleHud} aria-label={hudOn ? "Hide HUD" : "Show HUD"} aria-pressed={hudOn}>
-            <BarChart3 size={18} className={hudOn ? "text-brand" : ""} />
+            <BarChart3 size={18} className={hudOn ? "text-text" : ""} />
           </button>
         )}
         {flags.sounds && (
@@ -256,7 +256,7 @@ export function TablePage({ code }: { code: string }) {
         <button className="btn btn-ghost btn-sm px-2" onClick={() => setPanel("me")} aria-label="Your options"><User size={18} /></button>
         {view.me.isHost && (
           <button className="btn btn-ghost btn-sm px-2 relative" onClick={() => setPanel("host")} aria-label="Host controls">
-            <Settings2 size={18} className="text-brand" />
+            <Settings2 size={18} />
             {view.rebuyRequests.length > 0 && <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-red" />}
           </button>
         )}
