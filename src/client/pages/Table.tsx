@@ -239,7 +239,7 @@ export function TablePage({ code }: { code: string }) {
         <Link to="/" className="btn btn-ghost btn-sm -ml-2 px-2" aria-label="Lobby">
           <span className="font-extrabold tracking-wider text-gradient-gold" style={{ fontFamily: "var(--font-display)" }}>{APP_MARK}</span>
         </Link>
-        <button className="pill pill-gold shrink-0 num min-h-[32px]" onClick={() => setRulesOpen(true)} aria-label={`How to play ${variant.name}`}>{view.dealerChoice && <Dices size={12} className="inline -mt-0.5 mr-1" aria-label="Dealer's choice" />}{variant.short} {view.config.smallBlind}/{view.config.bigBlind}</button>
+        <button className="pill pill-gold shrink-0 num min-h-[32px]" onClick={() => setRulesOpen(true)} aria-label={`How to play ${variant.name}`}>{view.dealerChoice && <Dices size={12} className="inline -mt-0.5 mr-1" aria-label="Dealer's choice" />}{variant.short}{(hand ? hand.shortDeck : view.config.shortDeck && !variant.hiLo) ? " 6+" : ""} {view.config.smallBlind}/{view.config.bigBlind}</button>
         <button className="flex items-center gap-2 min-w-0 flex-1 text-left" onClick={copyLink} aria-label={`Copy table link (code ${code})`}>
           <span className={`truncate font-bold text-sm min-w-0 ${copied ? "" : "hidden sm:inline"}`}>{copied ? <span className="text-green-bright">Link copied</span> : view.name}</span>
           <Link2 size={13} className="text-dim shrink-0" aria-hidden="true" />
@@ -465,7 +465,14 @@ function CenterStatus({ view, landscape }: { view: TableView; landscape: boolean
   const hand = view.hand!;
   let text: string | null = null;
   let tone = "text-muted";
-  if (hand.phase === "showdown" && hand.result) {
+  const all = hand.result?.pots.flatMap((p) => p.winners) ?? [];
+  if (hand.phase === "showdown" && hand.result && all.some((w) => w.half === "low")) {
+    // hi-lo split: name the high and low winners
+    const nameOf = (seat: number) => (seat === GHOST_SEAT ? "👻 Ghost" : view.seats[seat]?.name ?? "");
+    const who = (half: "high" | "low") => [...new Set(all.filter((w) => w.half === half).map((w) => nameOf(w.seat)))].join(" & ");
+    text = `${who("high")} wins high · ${who("low")} wins low`;
+    tone = "text-gold-bright";
+  } else if (hand.phase === "showdown" && hand.result) {
     const best = hand.result.pots.flatMap((p) => p.winners).sort((a, b) => b.amount - a.amount)[0];
     if (best) {
       const name = best.seat === GHOST_SEAT ? "👻 Ghost" : view.seats[best.seat]?.name ?? "";

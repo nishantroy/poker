@@ -13,10 +13,15 @@ export function suitOf(card: Card): Suit {
   return card[1] as Suit;
 }
 
-export function freshDeck(): Card[] {
+/** 52 cards, or 36 for short deck (2s through 5s removed). */
+export function freshDeck(shortDeck = false): Card[] {
   const deck: Card[] = [];
-  for (const s of SUITS) for (const r of RANKS) deck.push(`${r}${s}` as Card);
+  for (const s of SUITS) for (const r of RANKS) if (!shortDeck || !"2345".includes(r)) deck.push(`${r}${s}` as Card);
   return deck;
+}
+
+export function deckSize(shortDeck: boolean): number {
+  return shortDeck ? 36 : 52;
 }
 
 /** Random source returning an integer in [0, n). */
@@ -45,8 +50,8 @@ export function shuffle<T>(arr: T[], rng: Rng = cryptoRng): T[] {
   return arr;
 }
 
-export function shuffledDeck(rng: Rng = cryptoRng): Card[] {
-  return shuffle(freshDeck(), rng);
+export function shuffledDeck(rng: Rng = cryptoRng, shortDeck = false): Card[] {
+  return shuffle(freshDeck(shortDeck), rng);
 }
 
 /** Deterministic RNG for tests (mulberry32). */

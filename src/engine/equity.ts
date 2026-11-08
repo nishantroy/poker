@@ -1,5 +1,5 @@
 import { type Card, type Rng, cryptoRng, freshDeck } from "./cards";
-import { evaluateHand } from "./evaluate";
+import { evaluateHand, evaluateOmahaLow } from "./evaluate";
 import type { VariantSpec } from "./variants";
 
 export interface EquityResult {
@@ -33,7 +33,7 @@ function combos(arr: Card[], k: number, fn: (c: Card[]) => void) {
  * so they are not dealt again. Exact enumeration when the remaining run-outs are few; otherwise Monte Carlo.
  */
 export function computeEquity(
-  spec: Pick<VariantSpec, "holeRule">,
+  spec: Pick<VariantSpec, "holeRule"> & { hiLo?: boolean; shortDeck?: boolean },
   holes: Card[][],
   board: Card[],
   dead: Card[] = [],
@@ -41,7 +41,8 @@ export function computeEquity(
 ): EquityResult {
   const n = holes.length;
   const known = new Set<Card>([...board, ...dead, ...holes.flat()]);
-  const deck = freshDeck().filter((c) => !known.has(c));
+  const deck = freshDeck(!!spec.shortDeck && !spec.hiLo).filter((c) => !known.has(c));
+  const rules = { shortDeck: !!spec.shortDeck && !spec.hiLo };
   const need = 5 - board.length;
   const win = new Array<number>(n).fill(0);
   const tie = new Array<number>(n).fill(0);
@@ -52,18 +53,29 @@ export function computeEquity(
     let best = -1;
     const scores = new Array<number>(n);
     for (let i = 0; i < n; i++) {
-      const s = evaluateHand(spec.holeRule, holes[i]!, full).score;
+      const s = evaluateHand(spec.holeRule, holes[i]!, full, rules).score;
       scores[i] = s;
       if (s > best) best = s;
     }
-    let winners = 0;
-    for (let i = 0; i < n; i++) if (scores[i] === best) winners++;
+    const hiWinners: number[] = [];
+    for (let i = 0; i < n; i++) if (scores[i] === best) hiWinners.push(i);
+    // hi-lo: the pot splits between the best high and the best qualifying low
+    let loWinners: number[] = [];
+    if (spec.hiLo) {
+      let bestLow = -1;
+      const lows = holes.map((h) => evaluateOmahaLow(h, full)?.score ?? -1);
+      for (const l of lows) if (l > bestLow) bestLow = l;
+      if (bestLow >= 0) loWinners = lows.flatMap((l, i) => (l === bestLow ? [i] : []));
+    }
+    const got = new Array<number>(n).fill(0);
+    const hiPart = loWinners.length ? 0.5 : 1;
+    for (const i of hiWinners) got[i]! += hiPart / hiWinners.length;
+    for (const i of loWinners) got[i]! += 0.5 / loWinners.length;
     for (let i = 0; i < n; i++) {
-      if (scores[i] === best) {
-        share[i]! += 1 / winners;
-        if (winners === 1) win[i]! += 1;
-        else tie[i]! += 1;
-      }
+      if (got[i]! <= 0) continue;
+      share[i]! += got[i]!;
+      if (got[i]! >= 0.999) win[i]! += 1; // scooped
+      else tie[i]! += 1;
     }
     trials++;
   };

@@ -70,7 +70,7 @@ export function equityRequest(rec: HandRecordView, stages: Stage[], id: number):
   for (const p of rec.players) cardsOf.set(p.seat, p.hole.every((c): c is Card => c !== null) ? (p.hole as Card[]) : null);
   if (rec.ghost) cardsOf.set(GHOST_SEAT, rec.ghost.hole);
   const allKnown = [...cardsOf.values()].flatMap((c) => c ?? []).concat(rec.ghost?.discarded ?? []);
-  const req: EquityRequest = { id, variant: rec.variant, stages: [] };
+  const req: EquityRequest = { id, variant: rec.variant, shortDeck: !!rec.shortDeck, stages: [] };
   for (const st of stages) {
     const holes: Card[][] = [];
     for (const seat of st.seats) {

@@ -36,6 +36,8 @@ export interface TableConfig {
   dealersChoice: DealersChoice;
   /** Allow the under-the-gun player to straddle (a voluntary third blind of 2× the big blind) with 3+ players. */
   straddle: boolean;
+  /** Short deck: 2s through 5s removed (36 cards); flush beats full house, trips beat a straight, A-6-7-8-9 is a straight. Not used for hi-lo games. */
+  shortDeck: boolean;
 }
 
 export type DealersChoice = "off" | "hand" | "orbit";
@@ -94,12 +96,14 @@ export interface BoardHand {
   name: string;
   score: number;
   cards: Card[];
+  /** Hi-lo games: the player's qualifying eight-or-better low on this board, if any. */
+  low?: { name: string; score: number; cards: Card[] } | null;
 }
 
 export interface PotResult {
   amount: number;
   /** `seat` may be GHOST_SEAT. `board` is set when several boards split the pot. */
-  winners: { seat: number; amount: number; handName?: string; cards?: Card[]; board?: number }[];
+  winners: { seat: number; amount: number; handName?: string; cards?: Card[]; board?: number; half?: "high" | "low" }[];
 }
 
 export interface BadBeat {
@@ -146,6 +150,8 @@ export interface Hand {
   result: HandResult | null;
   /** Monotonic counter incremented per action; the DO uses it to validate timer alarms. */
   actionSeq: number;
+  /** Short deck in force for this hand (fixed at the deal). */
+  shortDeck: boolean;
   /** Most runs allowed this hand (from config and the runtime flag, fixed at the deal). */
   runsAllowed: number;
   /** How many times the board is being run. When > 1, `boards` holds one board per run. */

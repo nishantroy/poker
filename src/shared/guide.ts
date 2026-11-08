@@ -50,6 +50,20 @@ export const GAME_GUIDE: Record<Variant, GameGuide> = {
     ],
     watchOut: ["Expect someone to have the nuts. Top set is often behind on a wet board."],
   },
+  plo8: {
+    tagline: "Omaha where the best high and the best low split the pot.",
+    rules: [
+      "Everyone gets 4 cards. Like Omaha, every hand uses exactly 2 of your cards and exactly 3 from the board, separately for high and for low.",
+      "Half the pot goes to the best normal (high) hand and half to the best low.",
+      "A low is 5 different ranks, all 8 or lower, with the ace counting low. Straights and flushes don't spoil a low, so A-2-3-4-5 (the wheel) is the best low and can win the high too.",
+      "If nobody has a low, the best high takes the whole pot. Lows are compared from the top card down: 7-5-4-3-2 beats 8-4-3-2-A.",
+    ],
+    watchOut: [
+      "You can win both halves (scoop) with different pairs of your cards.",
+      "If the board has fewer than 3 different cards 8 or lower, no low is possible.",
+      "Getting quartered (splitting the low with someone else) can lose you money even when you win.",
+    ],
+  },
   pineapple: {
     tagline: "Three cards, throw one away before the flop.",
     rules: [
@@ -93,6 +107,15 @@ export const HOUSE_RULES: HouseRule[] = [
       "With 3 or more players, the player to the left of the big blind can post a straddle of 2× the big blind before the cards are dealt.",
       "Preflop action then starts to the straddler's left, and the straddler acts last with the option to raise. The smallest raise is to double the straddle.",
       "Turn it on in your menu (\"Straddle under the gun\"). It applies every time you're in that seat until you turn it off.",
+    ],
+  },
+  {
+    id: "shortDeck",
+    title: "Short deck",
+    body: [
+      "A host setting that works with every game except PLO Hi-Lo: the 2s through 5s are removed, leaving 36 cards.",
+      "A flush beats a full house, three of a kind beats a straight, and A-6-7-8-9 counts as a straight (the ace plays low).",
+      "Fewer cards also means fewer players and boards fit, so 5- and 6-card Omaha seat fewer people.",
     ],
   },
   {

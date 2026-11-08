@@ -49,3 +49,20 @@ describe("computeEquity", () => {
     expect(r.equity[1]).toBeGreaterThan(r.equity[0]!);
   });
 });
+
+describe("hi-lo equity", () => {
+  const plo8 = { holeRule: "exactly2" as const, hiLo: true };
+  it("splits the pot between the high and the low on a finished board", () => {
+    const r = computeEquity(plo8, [c("Kh Kd Qs Js"), c("Ac 2c 9s 9d")], c("Ks 3d 4h 7c Th"));
+    expect(r.equity).toEqual([50, 50]);
+    expect(r.win).toEqual([0, 0]);
+  });
+  it("the high scoops when no low is possible", () => {
+    const r = computeEquity(plo8, [c("Kh Kd Qs Js"), c("Ac 2c 9s 9d")], c("Ks 9h Th Jc Qd"));
+    expect(r.equity).toEqual([100, 0]); // Qs Js make a K-high straight; no low possible
+  });
+  it("short deck deals from 36 cards", () => {
+    const r = computeEquity({ holeRule: "any" as const, shortDeck: true }, [c("As Ad"), c("Ks Kd")], c("6c 7d 9h Jc"));
+    expect(r.trials).toBe(36 - 8);
+  });
+});

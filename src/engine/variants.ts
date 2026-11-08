@@ -1,4 +1,4 @@
-export type Variant = "nlhe" | "plo" | "plo5" | "plo6" | "pineapple" | "crazy-pineapple";
+export type Variant = "nlhe" | "plo" | "plo5" | "plo6" | "plo8" | "pineapple" | "crazy-pineapple";
 
 export type BettingLimit = "no-limit" | "pot-limit";
 
@@ -13,6 +13,8 @@ export interface VariantSpec {
   /** Street after which each player must discard down to `discardTo` cards. */
   discardAfter?: "preflop" | "flop";
   discardTo?: number;
+  /** Split pot: half to the best high, half to the best eight-or-better low (when one qualifies). */
+  hiLo?: boolean;
 }
 
 export const VARIANTS: Record<Variant, VariantSpec> = {
@@ -20,6 +22,7 @@ export const VARIANTS: Record<Variant, VariantSpec> = {
   plo: { id: "plo", name: "Pot-Limit Omaha", short: "PLO", holeCards: 4, limit: "pot-limit", holeRule: "exactly2" },
   plo5: { id: "plo5", name: "5-Card Pot-Limit Omaha", short: "PLO5", holeCards: 5, limit: "pot-limit", holeRule: "exactly2" },
   plo6: { id: "plo6", name: "6-Card Pot-Limit Omaha", short: "PLO6", holeCards: 6, limit: "pot-limit", holeRule: "exactly2" },
+  plo8: { id: "plo8", name: "PLO Hi-Lo (8 or better)", short: "PLO8", holeCards: 4, limit: "pot-limit", holeRule: "exactly2", hiLo: true },
   pineapple: {
     id: "pineapple",
     name: "Pineapple",

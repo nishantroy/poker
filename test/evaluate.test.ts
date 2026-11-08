@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { evaluate5, evaluateAny, evaluateOmaha, describeHand, CATEGORY_NAMES } from "@engine/evaluate";
+import { evaluate5, evaluateAny, evaluateOmaha, evaluateOmahaLow, evaluateLow5, describeHand, describeLow, CATEGORY_NAMES } from "@engine/evaluate";
 import type { Card } from "@engine/cards";
 
 const c = (s: string) => s.split(" ") as Card[];
@@ -86,5 +86,55 @@ describe("evaluateOmaha", () => {
     expect(describeHand(r5)).toBe("Royal Flush");
     const r6 = evaluateOmaha(c("4d 5d 6d 7d 8s 9s"), board);
     expect(r6.category).toBe(4); // 8 9 T J Q straight using 8s 9s
+  });
+});
+
+describe("short deck ranking", () => {
+  const sd = { shortDeck: true };
+  it("a flush beats a full house, and trips beat a straight", () => {
+    const flush = evaluate5(c("Ah Kh 9h 7h 6h"), sd);
+    const boat = evaluate5(c("9s 9d 9c 6s 6d"), sd);
+    expect(flush.score).toBeGreaterThan(boat.score);
+    const trips = evaluate5(c("7s 7d 7c Kd Ah"), sd);
+    const straight = evaluate5(c("9s Td Jc Qd Kh"), sd);
+    expect(trips.score).toBeGreaterThan(straight.score);
+    // names don't change
+    expect(describeHand(flush)).toMatch(/^Flush/);
+    expect(describeHand(trips)).toMatch(/^Three of a Kind/);
+  });
+  it("A-6-7-8-9 is the lowest straight; with a full deck it is just ace high", () => {
+    const low = evaluate5(c("As 6d 7c 8h 9s"), sd);
+    expect(describeHand(low)).toBe("Straight, Nine high");
+    expect(low.score).toBeLessThan(evaluate5(c("6s 7d 8c 9h Ts"), sd).score);
+    expect(describeHand(evaluate5(c("As 6d 7c 8h 9s")))).toBe("Ace high");
+  });
+  it("full deck ranking is unchanged", () => {
+    expect(evaluate5(c("9s 9d 9c 6s 6d")).score).toBeGreaterThan(evaluate5(c("Ah Kh 9h 7h 6h")).score);
+  });
+});
+
+describe("eight-or-better low", () => {
+  it("needs five different ranks, all 8 or lower, ace low", () => {
+    expect(evaluateLow5(c("As 2d 3c 4h 5s"))).not.toBeNull();
+    expect(evaluateLow5(c("As 2d 3c 4h 9s"))).toBeNull();
+    expect(evaluateLow5(c("As 2d 3c 3h 5s"))).toBeNull();
+    expect(describeLow(evaluateLow5(c("As 2d 3c 4h 5s"))!)).toBe("Wheel (5-4-3-2-A) low");
+    expect(describeLow(evaluateLow5(c("8s 6d 4c 3h As"))!)).toBe("8-6-4-3-A low");
+  });
+  it("compares from the top card down", () => {
+    const a = evaluateLow5(c("7s 5d 4c 3h 2s"))!;
+    const b = evaluateLow5(c("8s 4d 3c 2h As"))!;
+    expect(a.score).toBeGreaterThan(b.score);
+    const d = evaluateLow5(c("8s 6d 3c 2h As"))!;
+    const e = evaluateLow5(c("8s 5d 4c 3h 2s"))!;
+    expect(e.score).toBeGreaterThan(d.score); // 8-5 beats 8-6
+  });
+  it("Omaha low uses exactly two hole cards", () => {
+    // board has three low cards; the hand needs two more different low cards from the hole
+    expect(evaluateOmahaLow(c("As 2s Kd Kh"), c("3c 4d 7h Qs Js"))!.ranks).toEqual([7, 4, 3, 2, 1]);
+    // only one low card in hand: no low
+    expect(evaluateOmahaLow(c("As Ks Kd Qh"), c("3c 4d 7h 6s 8s"))).toBeNull();
+    // fewer than three low cards on board: no low
+    expect(evaluateOmahaLow(c("As 2s 3d 4h"), c("3c Td 7h Qs Js"))).toBeNull();
   });
 });

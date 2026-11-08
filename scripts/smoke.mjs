@@ -397,6 +397,37 @@ assert(A.errors.every((e) => e.code === "disabled" || e.code === "taunt_cooldown
   S.forEach((p) => p.ws.close());
 }
 
+// ----- PLO hi-lo and short deck -----
+{
+  const mk = async (name, config) => (await (await fetch(`${BASE}/api/tables`, { method: "POST", headers: { "content-type": "application/json", cookie: a.cookie }, body: JSON.stringify({ name, config: { smallBlind: 1, bigBlind: 2, startingStack: 200, actionTimerMs: 8000, maxRuns: 1, ...config } }) })).json()).code;
+  // short deck hold'em: only 6s and up are dealt
+  const sdCode = await mk("Smoke short deck", { variant: "nlhe", shortDeck: true });
+  const X = await connect(a, sdCode), Y = await connect(b, sdCode);
+  send(X, { t: "sit", seat: 0, buyIn: 200 }); send(Y, { t: "sit", seat: 1, buyIn: 200 });
+  await wait(300); send(X, { t: "start" }); await wait(500);
+  assert(X.view.hand.shortDeck === true && X.view.seats[0].cards.every((c) => !"2345".includes(c[0])), "short deck table deals no 2s through 5s");
+  send(X, { t: "end" });
+  for (let i = 0; i < 40 && !X.ended; i++) { const h = X.view.hand; if (h?.phase === "betting") { const c = h.actor === 0 ? X : Y; send(c, { t: "action", seq: h.actionSeq, action: { type: "fold" } }); } await wait(300); }
+  X.ws.close(); Y.ws.close();
+  // PLO hi-lo: play an all-in hand to showdown
+  const hlCode = await mk("Smoke hi-lo", { variant: "plo8", shortDeck: true });
+  const P = await connect(a, hlCode), Q = await connect(b, hlCode);
+  send(P, { t: "sit", seat: 0, buyIn: 200 }); send(Q, { t: "sit", seat: 1, buyIn: 200 });
+  await wait(300); send(P, { t: "start" }); await wait(500);
+  assert(P.view.hand.variant === "plo8" && P.view.hand.shortDeck === false && P.view.seats[0].cards.length === 4, "PLO hi-lo deals 4 cards from the full deck even with short deck on");
+  for (let i = 0; i < 40 && P.view.hand.phase !== "showdown"; i++) {
+    const h = P.view.hand;
+    if (h.phase === "betting" && h.actor !== null) { const c = h.actor === 0 ? P : Q; send(c, { t: "action", seq: h.actionSeq, action: { type: c.view.me.limits?.canRaise ? "allin" : "call" } }); }
+    await wait(350);
+  }
+  const res = P.view.hand.result;
+  const paid = res.pots.flatMap((p) => p.winners).reduce((x, w) => x + w.amount, 0);
+  assert(P.view.hand.phase === "showdown" && paid === res.pots.reduce((x, p) => x + p.amount, 0) && P.view.seats.filter(Boolean).reduce((x, s) => x + s.stack, 0) === 400, "PLO hi-lo pays out every chip at showdown");
+  send(P, { t: "end" }); for (let i = 0; i < 30 && !P.ended; i++) await wait(300);
+  assert(P.ended && P.ended.reduce((x, r) => x + r.net, 0) === 0, "PLO hi-lo session nets sum to zero");
+  P.ws.close(); Q.ws.close();
+}
+
 // ----- dealer's choice and running it twice -----
 {
   const r3 = await fetch(`${BASE}/api/tables`, { method: "POST", headers: { "content-type": "application/json", cookie: a.cookie }, body: JSON.stringify({ name: "Smoke DC", config: { variant: "nlhe", smallBlind: 1, bigBlind: 2, startingStack: 200, actionTimerMs: 8000, maxRuns: 3, dealersChoice: "hand" } }) });

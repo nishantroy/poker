@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { advance, applyAction, canStartHand, chooseRuns, computePots, forfeit, getLimits, startHand, timeout, EngineError, setGhost, squidLoser, GHOST_SEAT } from "@engine/index";
 import { table, startRigged, act, stacks, awards, fixedRng } from "./helpers";
-import { createGame, seatPlayer } from "@engine/index";
+import { boardsThatFit, createGame, seatPlayer } from "@engine/index";
 import { baseConfig } from "./helpers";
 
 describe("hand setup", () => {
@@ -718,5 +718,65 @@ describe("straddle", () => {
     const short = startHand(table([1000, 1000, 1000, 20]), fixedRng(0), { straddleSeats: [3] });
     expect(short.state.hand!.currentBet).toBe(10);
     expect(short.state.hand!.actor).toBe(3);
+  });
+});
+
+describe("PLO hi-lo", () => {
+  const allInPreflop3 = (deal: string) => {
+    let s = startRigged(table([1000, 1000, 1000], { variant: "plo8" }), 0, deal).state;
+    // pot-limit: keep raising the maximum (or calling) until everyone is all in
+    for (let i = 0; i < 30 && s.hand!.phase === "betting"; i++) {
+      const seat = s.hand!.actor!;
+      s = act(s, seat, getLimits(s, seat).canRaise ? "allin" : "call").state;
+    }
+    while (s.hand!.phase !== "showdown") s = advance(s).state;
+    return s;
+  };
+  it("splits the pot between the best high and the best low", () => {
+    // deal order sb (1), bb (2), button (0). Seat 0: kings (high). Seat 1: A-2 (low). Seat 2: junk.
+    const s = allInPreflop3("Ac Th Kh 2c Tc Kd 9s 6s Qs 9d 6c Js  Ks 3d 4h 7c 8s");
+    const res = s.hand!.result!;
+    // 3000 pot: 1500 high to seat 0 (set of kings), 1500 low to seat 1 (7-4-3-2-A)
+    expect(stacks(s)).toEqual([1500, 1500, 0]);
+    const w = res.pots[0]!.winners;
+    expect(w).toContainEqual(expect.objectContaining({ seat: 0, amount: 1500, half: "high" }));
+    expect(w).toContainEqual(expect.objectContaining({ seat: 1, amount: 1500, half: "low", handName: "7-4-3-2-A low" }));
+    expect(res.hands[1]!.name).toMatch(/· 7-4-3-2-A low$/);
+  });
+  it("the high scoops when no low qualifies", () => {
+    const s = allInPreflop3("Ac Th Kh 2c Tc Kd 9s 6s Qs 9d 6c Js  Ks 9h Jd Qc Qh");
+    expect(stacks(s)[0]).toBe(3000);
+    expect(s.hand!.result!.pots[0]!.winners.every((w) => w.half === undefined)).toBe(true);
+  });
+  it("two identical lows get quartered", () => {
+    // seats 1 and 2 both hold A-2; seat 0 has the kings
+    const s = allInPreflop3("Ac Ad Kh 2c 2d Kd Ts Tc Qs 9d 9c Js  Ks 3d 4h 7c 8s");
+    expect(stacks(s)).toEqual([1500, 750, 750]);
+  });
+});
+
+describe("short deck", () => {
+  it("deals from 36 cards with no 2s through 5s", () => {
+    const s = startHand(table([1000, 1000, 1000], { shortDeck: true }), fixedRng(0)).state;
+    const all = [...s.hand!.deck, ...s.hand!.players.flatMap((p) => p.hole)];
+    expect(all).toHaveLength(36);
+    expect(all.some((c) => "2345".includes(c[0]!))).toBe(false);
+    expect(s.hand!.shortDeck).toBe(true);
+  });
+  it("a flush beats a full house at showdown", () => {
+    // heads-up: seat 0 (button/sb) hearts, seat 1 nines; board gives 9s full and a heart flush
+    let s = startRigged(table([1000, 1000], { shortDeck: true }), 0, "Ah 9s Kh 9d  9c 6h 6s Th 7h").state;
+    s = act(s, 0, "allin").state;
+    s = act(s, 1, "call").state;
+    while (s.hand!.phase !== "showdown") s = advance(s).state;
+    expect(stacks(s)).toEqual([2000, 0]);
+    expect(s.hand!.result!.hands[1]!.name).toMatch(/^Full House/);
+  });
+  it("fewer players fit, and hi-lo games always use the full deck", () => {
+    expect(boardsThatFit({ ...baseConfig, variant: "plo6", shortDeck: true }, 6, false)).toBe(0); // 36 - 36 leaves no board
+    expect(boardsThatFit({ ...baseConfig, variant: "plo6", shortDeck: false }, 6, false)).toBe(1);
+    const s = startHand(table([1000, 1000], { variant: "plo8", shortDeck: true }), fixedRng(0)).state;
+    expect(s.hand!.shortDeck).toBe(false);
+    expect(s.hand!.deck.length + 8).toBe(52);
   });
 });

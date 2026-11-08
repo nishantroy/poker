@@ -7,6 +7,7 @@ import type { Variant } from "@engine/variants";
 export interface EquityRequest {
   id: number;
   variant: Variant;
+  shortDeck?: boolean;
   /** `boards`: every board still in play at this stage; equities are averaged across them (pots split per board). */
   stages: { key: string; boards: Card[][]; seats: number[]; holes: Card[][]; dead: Card[] }[];
 }
@@ -17,7 +18,7 @@ export interface EquityResponse {
 
 self.onmessage = (ev: MessageEvent<EquityRequest>) => {
   const req = ev.data;
-  const spec = VARIANTS[req.variant];
+  const spec = { ...VARIANTS[req.variant], shortDeck: !!req.shortDeck };
   const out: EquityResponse = { id: req.id, stages: [] };
   for (const st of req.stages) {
     if (st.holes.length < 2) {

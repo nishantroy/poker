@@ -51,6 +51,8 @@ export interface HandRecord {
   boards: Card[][];
   /** Squid Game: index of the eliminated board. */
   eliminated: number | null;
+  /** Short deck (36 cards) was in force. Missing on records saved before it existed. */
+  shortDeck?: boolean;
   /** Per board: cards that would have followed had the hand gone to the river. */
   rabbit: Card[][];
   /** The ghost player's hand, when one was dealt in. */

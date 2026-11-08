@@ -218,6 +218,7 @@ function CreateSheet({ open, onClose }: { open: boolean; onClose: () => void }) 
         </div>
         {flags.squid && <BoardsPicker boards={cfg.boards} squid={cfg.squid} onChange={(b, sq) => setCfg((c) => ({ ...c, boards: b, squid: sq }))} />}
         {flags.runItTwice && <RunsPicker value={cfg.maxRuns} onChange={(n) => set("maxRuns", n)} />}
+        {flags.shortDeck && <Toggle label="Short deck (6+)" hint={`Removes the 2s through 5s (36 cards). Flush beats full house, trips beat a straight, A-6-7-8-9 is a straight.${VARIANTS[cfg.variant].hiLo ? " Not used for PLO Hi-Lo, which always plays the full deck." : ""}`} checked={cfg.shortDeck} onChange={(v) => set("shortDeck", v)} />}
         {flags.straddle && <Toggle label="Allow straddles" hint="Under the gun may post 2× the big blind before the deal and act last preflop." checked={cfg.straddle} onChange={(v) => set("straddle", v)} />}
         {flags.dealersChoice && flags.variants && <DealersChoicePicker value={cfg.dealersChoice} onChange={(v) => set("dealersChoice", v)} />}
         {err && <p className="text-sm text-[#ff8b8e]" role="alert">{err}</p>}

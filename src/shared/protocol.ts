@@ -1,5 +1,5 @@
 import type { Card } from "@engine/cards";
-import type { Variant } from "@engine/variants";
+import { type Variant, isVariant } from "@engine/variants";
 import type { Action, ActionLimits, BadBeat, BoardHand, HandResult, Phase, Street, TableConfig } from "@engine/types";
 import type { HandRecord, HudCounters } from "@engine/hud";
 import type { Flags } from "./flags";
@@ -113,6 +113,8 @@ export interface PublicHand {
   rabbit: Card[][] | null;
   /** A rabbit hunt is possible for this hand (ended early, option on, not yet revealed). */
   rabbitAvailable: boolean;
+  /** Short deck (36 cards) in force for this hand. */
+  shortDeck: boolean;
   /** Times the board is being run; when > 1 each entry in `boards` is one run. */
   runs: number;
   /** Open "run it twice" vote. Picks stay private; `decided` lists who has picked. */
@@ -332,7 +334,7 @@ export const LIMITS = {
 } as const;
 
 export function defaultConfig(): TableConfig {
-  return { variant: "nlhe", smallBlind: 1, bigBlind: 2, ante: 0, startingStack: 200, maxSeats: 8, actionTimerMs: 30_000, boards: 1, squid: false, maxRuns: 3, dealersChoice: "off", straddle: true };
+  return { variant: "nlhe", smallBlind: 1, bigBlind: 2, ante: 0, startingStack: 200, maxSeats: 8, actionTimerMs: 30_000, boards: 1, squid: false, maxRuns: 3, dealersChoice: "off", straddle: true, shortDeck: false };
 }
 
 export function validateConfig(input: unknown): TableConfig {
@@ -343,7 +345,7 @@ export function validateConfig(input: unknown): TableConfig {
     return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : dflt;
   };
   const cfg: TableConfig = {
-    variant: typeof o.variant === "string" && ["nlhe", "plo", "plo5", "plo6", "pineapple", "crazy-pineapple"].includes(o.variant) ? (o.variant as Variant) : d.variant,
+    variant: isVariant(o.variant) ? o.variant : d.variant,
     smallBlind: int(o.smallBlind, 1, 1_000_000, d.smallBlind),
     bigBlind: int(o.bigBlind, 1, 2_000_000, d.bigBlind),
     ante: int(o.ante, 0, 1_000_000, d.ante),
@@ -355,6 +357,7 @@ export function validateConfig(input: unknown): TableConfig {
     maxRuns: int(o.maxRuns, 1, 3, d.maxRuns),
     dealersChoice: o.dealersChoice === "hand" || o.dealersChoice === "orbit" ? o.dealersChoice : "off",
     straddle: typeof o.straddle === "boolean" ? o.straddle : d.straddle,
+    shortDeck: typeof o.shortDeck === "boolean" ? o.shortDeck : d.shortDeck,
   };
   if (cfg.boards === 1) cfg.squid = false;
   if (cfg.bigBlind < cfg.smallBlind) cfg.bigBlind = cfg.smallBlind;

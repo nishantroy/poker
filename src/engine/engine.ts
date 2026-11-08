@@ -1,6 +1,6 @@
-import { type Card, type Rng, cryptoRng, rankValue, shuffledDeck, suitOf, SUITS } from "./cards";
+import { type Card, type Rng, cryptoRng, deckSize, rankValue, shuffledDeck, suitOf, SUITS } from "./cards";
 import { computeEquity } from "./equity";
-import { describeHand, evaluateHand } from "./evaluate";
+import { describeHand, describeLow, evaluateHand, evaluateOmahaLow } from "./evaluate";
 import {
   type Action, type ActionLimits, type BoardHand, type GameEvent, type GameState, type Hand, type HandPlayer, type HandResult, type Pot,
   type Seat, type Street, type TableConfig, GHOST_SEAT,
@@ -88,9 +88,14 @@ export function isHandLive(state: GameState): boolean {
 }
 
 /** How many boards a hand with `players` players (plus the ghost) can deal with this config. 0 when even one does not fit. */
+/** Short deck applies to every game except hi-lo ones (no qualifying low exists without the small cards). */
+export function usesShortDeck(config: Pick<TableConfig, "variant" | "shortDeck">): boolean {
+  return !!config.shortDeck && !VARIANTS[config.variant].hiLo;
+}
+
 export function boardsThatFit(config: TableConfig, players: number, ghost: boolean): number {
   const spec = VARIANTS[config.variant];
-  const left = 52 - spec.holeCards * (players + (ghost ? 1 : 0));
+  const left = deckSize(usesShortDeck(config)) - spec.holeCards * (players + (ghost ? 1 : 0));
   return Math.max(0, Math.min(config.boards ?? 1, Math.floor(left / 5)));
 }
 
@@ -189,7 +194,8 @@ export function startHand(state: GameState, rng: Rng = cryptoRng, opts: StartOpt
   s.button = nextButtonSeat(s) ?? drawn ?? partSeats[rng(partSeats.length)]!;
   s.handCount += 1;
 
-  const deck = shuffledDeck(rng);
+  const shortDeck = usesShortDeck(s.config);
+  const deck = shuffledDeck(rng, shortDeck);
   const players: HandPlayer[] = parts.map((seat) => ({
     seat: seat.seat, playerId: seat.playerId, hole: [], discarded: [], folded: false, allIn: false,
     streetBet: 0, totalBet: 0, acted: false, canRaise: true, revealed: false,
@@ -199,6 +205,7 @@ export function startHand(state: GameState, rng: Rng = cryptoRng, opts: StartOpt
     ghost: null, players, button: s.button,
     smallBlindSeat: -1, bigBlindSeat: -1, street: "preflop", phase: "betting", actor: null,
     currentBet: 0, minRaise: s.config.bigBlind, lastAggressor: null, pendingDiscard: [], result: null, actionSeq: 0,
+    shortDeck,
     runsAllowed: opts.allowRuns === false ? 1 : Math.max(1, Math.min(3, s.config.maxRuns ?? 1)), runs: 1, runChoice: null,
   };
   s.hand = hand;
@@ -531,7 +538,7 @@ function ghostDiscard(hand: Hand) {
   const choose = (cur: Card[], start: number) => {
     if (cur.length === keep) {
       let score: number;
-      if (board.length >= 3) score = evaluateHand(spec.holeRule, cur, board).score;
+      if (board.length >= 3) score = evaluateHand(spec.holeRule, cur, board, { shortDeck: hand.shortDeck }).score;
       else {
         const ranks = cur.map(rankValue).sort((a, b) => b - a);
         const pair = ranks[0] === ranks[1];
@@ -754,25 +761,31 @@ function showdown(s: GameState, hand: Hand, events: GameEvent[]) {
 
   const ghostHands: Record<number, BoardHand> = {};
   ghostDiscard(hand); // a Pineapple ghost that never reached its discard street still shows a legal hand
+  const rules = { shortDeck: !!hand.shortDeck };
+  const rate = (hole: Card[], board: Card[]): BoardHand => {
+    const r = evaluateHand(spec.holeRule, hole, board, rules);
+    const bh: BoardHand = { name: describeHand(r), score: r.score, cards: r.cards };
+    if (spec.hiLo) {
+      const lo = evaluateOmahaLow(hole, board);
+      bh.low = lo ? { name: describeLow(lo), score: lo.score, cards: lo.cards } : null;
+    }
+    return bh;
+  };
   if (contested) {
     for (const b of surviving) {
-      for (const p of live) {
-        const r = evaluateHand(spec.holeRule, p.hole, hand.boards[b]!);
-        result.boardHands[b]![p.seat] = { name: describeHand(r), score: r.score, cards: r.cards };
-      }
-      if (ghost) {
-        const r = evaluateHand(spec.holeRule, ghost.hole, hand.boards[b]!);
-        ghostHands[b] = { name: describeHand(r), score: r.score, cards: r.cards };
-      }
+      for (const p of live) result.boardHands[b]![p.seat] = rate(p.hole, hand.boards[b]!);
+      if (ghost) ghostHands[b] = rate(ghost.hole, hand.boards[b]!);
     }
     for (const p of live) {
-      // headline: the player's best board
+      // headline: the player's best board (plus their best low in hi-lo games)
       let best: BoardHand | null = null;
+      let bestLow: BoardHand["low"] = null;
       for (const b of surviving) {
         const h = result.boardHands[b]![p.seat]!;
         if (!best || h.score > best.score) best = h;
+        if (h.low && (!bestLow || h.low.score > bestLow.score)) bestLow = h.low;
       }
-      result.hands[p.seat] = best!;
+      result.hands[p.seat] = spec.hiLo ? { ...best!, name: bestLow ? `${best!.name} · ${bestLow.name}` : best!.name, low: bestLow } : best!;
       p.revealed = true;
       events.push({ type: "showdown", seat: p.seat, cards: [...p.hole], handName: best!.name });
     }
@@ -808,19 +821,33 @@ function showdown(s: GameState, hand: Hand, events: GameEvent[]) {
         const hands = result.boardHands[b]!;
         const candidates: number[] = clockwise.filter((seat) => elig.includes(seat));
         if (withGhost) candidates.push(GHOST_SEAT);
-        const scoreOf = (seat: number) => (seat === GHOST_SEAT ? ghostHands[b]!.score : hands[seat]!.score);
         const handOf = (seat: number) => (seat === GHOST_SEAT ? ghostHands[b]! : hands[seat]!);
-        let best = -1;
-        for (const seat of candidates) best = Math.max(best, scoreOf(seat));
-        const winners = candidates.filter((seat) => scoreOf(seat) === best);
-        const each = Math.floor(share / winners.length);
-        let odd = share - each * winners.length;
-        for (const seat of winners) {
-          const amt = each + (odd > 0 ? 1 : 0);
-          if (odd > 0) odd -= 1;
-          const h = handOf(seat);
-          pr.winners.push({ seat, amount: amt, handName: h.name, cards: h.cards, board: multi ? b : undefined });
-          events.push({ type: "potAwarded", seat, amount: amt, potIndex, handName: h.name, board: multi ? b : undefined });
+        // Split `amount` between the best hands among `pool` (odd chips clockwise from the button).
+        const award = (amount: number, pool: number[], half: "high" | "low" | undefined) => {
+          const scoreOf = (seat: number) => (half === "low" ? handOf(seat).low!.score : handOf(seat).score);
+          let best = -Infinity;
+          for (const seat of pool) best = Math.max(best, scoreOf(seat));
+          const winners = pool.filter((seat) => scoreOf(seat) === best);
+          const each = Math.floor(amount / winners.length);
+          let odd = amount - each * winners.length;
+          for (const seat of winners) {
+            const amt = each + (odd > 0 ? 1 : 0);
+            if (odd > 0) odd -= 1;
+            const h = handOf(seat);
+            const name = half === "low" ? h.low!.name : h.name;
+            const cards = half === "low" ? h.low!.cards : h.cards;
+            pr.winners.push({ seat, amount: amt, handName: name, cards, board: multi ? b : undefined, half });
+            events.push({ type: "potAwarded", seat, amount: amt, potIndex, handName: name, board: multi ? b : undefined });
+          }
+        };
+        if (spec.hiLo) {
+          // Hi-lo: half to the best high, half to the best qualifying low; no low means the high scoops. Odd chip to the high.
+          const lows = candidates.filter((seat) => !!handOf(seat).low);
+          const lowAmt = lows.length ? Math.floor(share / 2) : 0;
+          award(share - lowAmt, candidates, lows.length ? "high" : undefined);
+          if (lowAmt > 0) award(lowAmt, lows, "low");
+        } else {
+          award(share, candidates, undefined);
         }
       }
     }
@@ -849,7 +876,7 @@ function showdown(s: GameState, hand: Hand, events: GameEvent[]) {
     const headline = contested ? Object.values(ghostHands).sort((a, b) => b.score - a.score)[0]?.name ?? null : null;
     events.push({ type: "ghostShown", cards: [...ghost.hole], handName: headline, won: ghostWon });
   }
-  if (contested && surviving.length === 1 && hand.boards[surviving[0]!]!.length === 5) {
+  if (contested && !spec.hiLo && surviving.length === 1 && hand.boards[surviving[0]!]!.length === 5) {
     const bb = detectBadBeat(hand, live, result, surviving[0]!, ghostCompetes ? ghostHands : null);
     if (bb) {
       result.badBeat = bb;
@@ -874,7 +901,7 @@ function detectBadBeat(hand: Hand, live: HandPlayer[], result: HandResult, board
   if (won.size === 0) return null;
   const dead = hand.players.flatMap((p) => (p.folded ? p.hole : p.discarded)).concat(hand.ghost?.discarded ?? []);
   const turn = hand.boards[board]!.slice(0, 4);
-  const eq = computeEquity(spec, holes, turn, dead, { maxExact: 100 });
+  const eq = computeEquity({ ...spec, shortDeck: !!hand.shortDeck }, holes, turn, dead, { maxExact: 100 });
   let victim: number | null = null;
   let victimEq = 0;
   seats.forEach((seat, i) => {

@@ -209,6 +209,7 @@ export class TableDO extends DurableObject<Env> {
           g.hand.eliminated ??= null;
           g.hand.ghost ??= null;
           g.hand.runs ??= 1;
+          g.hand.shortDeck ??= false;
           g.hand.runsAllowed ??= 1;
           g.hand.runChoice ??= null;
           if (g.hand.result) {
@@ -286,6 +287,13 @@ export class TableDO extends DurableObject<Env> {
       if (isHandLive(g)) meta.pendingConfig = cfg;
       else g.config = cfg;
       this.log("system", `Multi-board games are switched off for now; this table deals one board${isHandLive(g) ? " from the next hand" : ""}.`);
+    }
+    const target3 = meta.pendingConfig ?? g.config;
+    if (!flags.shortDeck && target3.shortDeck) {
+      const cfg = { ...target3, shortDeck: false };
+      if (isHandLive(g)) meta.pendingConfig = cfg;
+      else g.config = cfg;
+      this.log("system", `Short deck is switched off for now; this table uses the full deck${isHandLive(g) ? " from the next hand" : ""}.`);
     }
     if (!flags.ghost && meta.ghostVote) meta.ghostVote = null;
     if (changed && announce) this.afterChange();
@@ -645,6 +653,8 @@ export class TableDO extends DurableObject<Env> {
         if (merged.variant !== g.config.variant) changes.push(`game → ${VARIANTS[merged.variant].name}`);
         if (merged.smallBlind !== g.config.smallBlind || merged.bigBlind !== g.config.bigBlind) changes.push(`blinds → ${merged.smallBlind}/${merged.bigBlind}`);
         if (merged.ante !== g.config.ante) changes.push(`ante → ${merged.ante}`);
+        if (!meta.flags.shortDeck && merged.shortDeck) throw new EngineError("disabled", "Short deck is switched off right now");
+        if (merged.shortDeck !== g.config.shortDeck) changes.push(merged.shortDeck ? "short deck (no 2s-5s)" : "full deck");
         if (merged.straddle !== g.config.straddle) changes.push(merged.straddle ? "straddles allowed" : "no straddles");
         if (merged.maxRuns !== g.config.maxRuns) changes.push(merged.maxRuns === 1 ? "run it once only" : `run it up to ${merged.maxRuns === 2 ? "twice" : "three times"}`);
         if (merged.dealersChoice !== g.config.dealersChoice) changes.push(merged.dealersChoice === "off" ? "dealer's choice off" : `dealer's choice each ${merged.dealersChoice}`);
@@ -939,7 +949,7 @@ export class TableDO extends DurableObject<Env> {
         seat: p.seat, playerId: p.playerId, name: g.seats[p.seat]?.name ?? "?", hole: [...p.hole], discarded: [...p.discarded],
         startStack: meta.cur?.startStacks[p.seat] ?? 0, revealed: p.revealed && !p.folded, folded: p.folded,
       })),
-      boards: h.boards.map((b) => [...b]), eliminated: h.eliminated, rabbit: rabbitBoards(h), events: meta.cur?.events ?? [], result: h.result,
+      boards: h.boards.map((b) => [...b]), eliminated: h.eliminated, shortDeck: !!h.shortDeck, rabbit: rabbitBoards(h), events: meta.cur?.events ?? [], result: h.result,
       ghost: h.ghost ? { hole: [...h.ghost.hole], discarded: [...h.ghost.discarded], stake: h.ghost.stake, won: h.result?.ghost?.won ?? 0 } : null,
       startedAt: meta.cur?.startedAt ?? now, endedAt: now,
     };
@@ -1311,6 +1321,7 @@ export class TableDO extends DurableObject<Env> {
           smallBlindSeat: h.smallBlindSeat, bigBlindSeat: h.bigBlindSeat,
           rabbit: h.phase === "showdown" && meta.rabbitShown === h.number ? rabbitBoards(h) : null,
           runs: h.runs ?? 1,
+          shortDeck: !!h.shortDeck,
           runChoice: h.runChoice
             ? { max: h.runChoice.max, pending: [...h.runChoice.pending], decided: Object.keys(h.runChoice.choices).map(Number), mine: mySeat ? h.runChoice.choices[mySeat.seat] ?? null : null }
             : null,
