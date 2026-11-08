@@ -44,7 +44,7 @@ export function SeatView({ seat, isMe, acting, timer, offset, isButton, isWinner
   const out = seat.status === "sittingOut" || (!seat.inHand && seat.stack === 0);
   const cards = seat.cards ?? [];
   const best = new Set(seat.bestCards ?? []);
-  const showCards = cards.length > 0 && !(seat.folded && !isMe);
+  const showCards = cards.length > 0 && !(seat.folded && !isMe && !seat.revealed);
   return (
     <div className={`flex flex-col items-center ${seat.folded ? "opacity-80" : ""}`} style={{ width: big ? 140 : 96 }}>
       {big && isWinner && winAmount > 0 && <span className="mb-1 pill pill-gold anim-pop num">+{fmtChips(winAmount)}</span>}

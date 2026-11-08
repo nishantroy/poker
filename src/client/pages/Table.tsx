@@ -1,4 +1,4 @@
-import { BarChart3, Bell, BellOff, Dices, Ghost, Link2, MessageSquare, Rabbit, ScrollText, Settings2, Smile, User } from "lucide-react";
+import { BarChart3, Bell, BellOff, Dices, Eye, Ghost, Link2, MessageSquare, Rabbit, ScrollText, Settings2, Smile, User } from "lucide-react";
 import { APP_MARK, APP_NAME } from "@shared/brand";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Action, PublicSeat, TableView } from "@shared/protocol";
@@ -427,7 +427,7 @@ export function TablePage({ code }: { code: string }) {
           ) : amDiscarding ? (
             <DiscardBar selected={selectedCard} count={hand!.pendingDiscard.length} onDiscard={() => selectedCard !== null && act({ type: "discard", amount: selectedCard })} />
           ) : (
-            <StatusBar view={view} onSit={() => setSitSeat(firstEmpty(view.seats))} onStart={() => send({ t: "start" })} onRabbit={() => send({ t: "rabbit" })} onPickGame={() => setChoiceHidden(false)} />
+            <StatusBar view={view} onSit={() => setSitSeat(firstEmpty(view.seats))} onStart={() => send({ t: "start" })} onRabbit={() => send({ t: "rabbit" })} onPickGame={() => setChoiceHidden(false)} onShow={() => send({ t: "show" })} />
           )}
           </div>
         </div>
@@ -489,7 +489,7 @@ function CenterStatus({ view, landscape }: { view: TableView; landscape: boolean
   return <p className={`text-xs font-semibold text-center ${tone} ${landscape ? "text-sm" : ""} bg-black/40 rounded-full px-3 py-1 anim-fade-up`} key={text}>{text}</p>;
 }
 
-function StatusBar({ view, onSit, onStart, onRabbit, onPickGame }: { view: TableView; onSit: () => void; onStart: () => void; onRabbit: () => void; onPickGame: () => void }) {
+function StatusBar({ view, onSit, onStart, onRabbit, onPickGame, onShow }: { view: TableView; onSit: () => void; onStart: () => void; onRabbit: () => void; onPickGame: () => void; onShow: () => void }) {
   const hand = view.hand;
   const mySeat = view.me.seat !== null ? view.seats[view.me.seat] : null;
   const players = view.seats.filter(Boolean).length;
@@ -525,11 +525,15 @@ function StatusBar({ view, onSit, onStart, onRabbit, onPickGame }: { view: Table
     const a = hand.actor !== null ? view.seats[hand.actor] : null;
     text = a ? `Waiting for ${a.name}…` : "Hand in progress.";
   }
-  if (hand?.rabbitAvailable && !action) action = { label: "Rabbit hunt", onClick: onRabbit, cls: "" };
+  const extra: { label: string; onClick: () => void; cls: string; icon?: React.ReactNode }[] = [];
+  const canShow = view.flags.showCards && hand?.phase === "showdown" && !!mySeat?.inHand && !mySeat.revealed && (mySeat.cards?.length ?? 0) > 0;
+  if (canShow) extra.push({ label: "Show cards", onClick: onShow, cls: "btn-primary", icon: <Eye size={16} aria-hidden="true" /> });
+  if (hand?.rabbitAvailable && !action) extra.push({ label: "Rabbit", onClick: onRabbit, cls: "", icon: <Rabbit size={16} aria-hidden="true" /> });
   return (
-    <div className="card-surface px-4 py-3 flex items-center gap-3 min-h-[56px]">
-      <p className="text-sm text-muted flex-1">{text}</p>
-      {action && <button className={`btn btn-sm ${action.cls}`} onClick={action.onClick}>{action.label === "Rabbit hunt" && <Rabbit size={16} aria-hidden="true" />}{action.label}</button>}
+    <div className="card-surface px-4 py-3 flex items-center gap-2 min-h-[56px]">
+      <p className="text-sm text-muted flex-1 min-w-0">{text}</p>
+      {action && <button className={`btn btn-sm ${action.cls}`} onClick={action.onClick}>{action.label}</button>}
+      {extra.map((x) => <button key={x.label} className={`btn btn-sm shrink-0 ${x.cls}`} onClick={x.onClick}>{x.icon}{x.label}</button>)}
     </div>
   );
 }

@@ -255,7 +255,7 @@ assert(A.errors.every((e) => e.code === "disabled" || e.code === "taunt_cooldown
   assert(C.view.status === "running", "table stays running when a player drops between hands");
   assert(C.view.hand?.number === 1 && C.view.seats[1].status === "sittingOut", "dropped player is sat out and no hand is dealt short-handed");
   D = await connect(b, code2);
-  await wait(4500);
+  for (let i = 0; i < 16 && C.view.hand?.number !== 2; i++) await wait(500);
   assert(C.view.hand?.number === 2, "next hand deals itself when the player returns, no Start needed");
   assert(C.errors.length === 0 && D.errors.length === 0, "auto-deal section had no socket errors");
   C.ws.close(); D.ws.close();
@@ -299,6 +299,44 @@ assert(A.errors.every((e) => e.code === "disabled" || e.code === "taunt_cooldown
   assert(res.length === 3 && sum === 0, `session nets sum to zero after repeated stand requests (sum ${sum})`);
   assert(leaver && leaver.buyIn === 200 && leaver.net === leaver.cashOut - 200 && leaver.cashOut <= 200, "the leaver is counted once with their real cash-out");
   P.forEach((p) => p.ws.close());
+}
+
+// ----- cheating attempts from the review, and showing cards -----
+{
+  const r5 = await fetch(`${BASE}/api/tables`, { method: "POST", headers: { "content-type": "application/json", cookie: a.cookie }, body: JSON.stringify({ name: "Smoke cheat", config: { variant: "nlhe", smallBlind: 1, bigBlind: 2, startingStack: 200, actionTimerMs: 8000, maxRuns: 1 } }) });
+  const code5 = (await r5.json()).code;
+  const H = await connect(a, code5), V = await connect(b, code5);
+  // fractional seat numbers are rejected
+  send(V, { t: "sit", seat: 0.5, buyIn: 200 }); await wait(250);
+  assert(V.errors.some((e) => e.code === "bad_seat") && V.view.seats.every((s) => !s), "fractional seat number is rejected");
+  send(H, { t: "sit", seat: 0, buyIn: 200 }); send(V, { t: "sit", seat: 1, buyIn: 200 });
+  await wait(300); send(H, { t: "start" }); await wait(500);
+  // hand 1: everyone folds to one player, who then shows
+  {
+    const h = H.view.hand; const actor = h.actor === 0 ? H : V; const other = actor === H ? V : H; const otherSeat = actor === H ? 1 : 0;
+    send(other, { t: "show" }); await wait(200);
+    assert(other.errors.some((e) => e.code === "cannot_show"), "cannot show cards while the hand is live");
+    send(actor, { t: "action", seq: h.actionSeq, action: { type: "fold" } }); await wait(300);
+    assert(actor.view.seats[otherSeat].cards.every((c) => c === null), "uncontested winner's cards stay hidden by default");
+    send(other, { t: "show" }); await wait(300);
+    assert(actor.view.seats[otherSeat].cards.every((c) => typeof c === "string"), "a player can show their cards after everyone folds");
+  }
+  // hand 2: both all-in, host tries to kick the opponent and end the session during the run-out
+  for (let i = 0; i < 20 && !(H.view.hand?.number === 2); i++) await wait(500);
+  for (let i = 0; i < 6 && H.view.hand.phase === "betting"; i++) {
+    const h = H.view.hand; const c = h.actor === 0 ? H : V;
+    send(c, { t: "action", seq: h.actionSeq, action: { type: c.view.me.limits.canRaise ? "allin" : "call" } });
+    await wait(300);
+  }
+  assert(H.view.hand.phase === "runout", "both players all-in");
+  send(H, { t: "kick", playerId: b.user.id }); await wait(200);
+  send(H, { t: "end" }); await wait(200);
+  assert(!H.view.seats[1].folded && H.view.hand.phase !== "showdown", "host cannot fold out an all-in player by kicking during the run-out");
+  assert(H.view.endPending && H.view.status !== "ended", "ending mid-hand waits for the hand to finish");
+  for (let i = 0; i < 20 && !H.ended; i++) await wait(500);
+  const res = H.ended;
+  assert(res && res.reduce((x, r) => x + r.net, 0) === 0 && H.view.hand.result.hands[1] && H.view.hand.result.hands[0], "the all-in pot is played out to showdown and the session ends with nets summing to zero");
+  H.ws.close(); V.ws.close();
 }
 
 // ----- dealer's choice and running it twice -----

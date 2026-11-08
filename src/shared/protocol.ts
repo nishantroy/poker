@@ -227,6 +227,7 @@ export type ClientMessage =
   | { t: "taunt"; id: number }
   | { t: "runs"; runs: number }
   | { t: "chooseGame"; variant: Variant }
+  | { t: "show" }
   | { t: "ping" };
 
 // ----- server -> client -----

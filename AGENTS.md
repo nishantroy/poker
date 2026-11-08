@@ -33,3 +33,9 @@ See the root `/Users/nishantroy/code/AGENTS.md` for shared conventions (ports, w
 - Events: `ws.connect`/`ws.close`, `msg.<type>` for every client message (actions include `seq`/`actionSeq`/`actor`), `msg.rejected` (EngineError code), `msg.crash`, `hand.start`/`hand.skip` (with `reason` and a seat snapshot)/`hand.end`, `seat.autoSitOut`, `timer.set`, `alarm`/`alarm.noop`/`alarm.crash`, `flags.apply`, `session.end`, `table.log` (mirrors the in-game log text), `auth.*`, `table.create`, `admin.flag`, `api.crash`, `client.error` (browser errors posted to `/api/client-log`).
 - Snapshot of one table's server state (admin only, live hole cards and deck hidden): `GET /api/admin/tables/<CODE>/debug`. Returns meta, game state, pending alarm time, connected sockets and the last 150 in-game log lines. The admin can open it in a logged-in browser and paste the JSON.
 - Never log PINs, session tokens or live hole cards.
+
+## Integrity rules (cheating prevention)
+- Treat every WebSocket message and HTTP body as hostile. Validate types (`Number.isInteger` for seats and counts) before any state change, and never mutate `meta` (ledger, votes, departed) before the last check that can throw.
+- Nobody is ever folded once their chips are all in or the betting is over: kicks never fold, stands only fold a player during their own betting/discard round. Leaving mid-hand is deferred to showdown (`meta.leaving`), and ending a session mid-hand waits for showdown (`meta.endPending`).
+- Cards leave the server only through `viewFor`, `recordView` and the admin `debugSnapshot`, and only when the table has seen them (revealed at showdown/all-in, shown by choice via `show`, or unlocked replays). The deck is never sent.
+- `npm run smoke` includes the known attack sequences (repeated stand while folded, fractional seats, kick/end during a run-out). Session nets must always sum to zero; add an assertion for any new money path.

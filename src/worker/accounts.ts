@@ -91,6 +91,11 @@ CREATE TABLE IF NOT EXISTS feedback (
 );
 `;
 
+/** Local development (wrangler dev) has no client address; Cloudflare always sets one in production. */
+function isLocal(ip: string) {
+  return ip === "local" || ip === "unknown" || ip === "127.0.0.1" || ip === "::1";
+}
+
 export class AuthError extends Error {
   constructor(public status: number, public code: string, message: string) {
     super(message);
@@ -125,7 +130,8 @@ export class AccountsDO extends DurableObject<Env> {
   }
 
   async signup(username: string, pin: string, ip = "unknown"): Promise<{ user: UserInfo; token: string }> {
-    if (!this.hit(`signup:${ip}`, 5, 60 * 60 * 1000)) throw new AuthError(429, "too_many", "Too many new accounts from here. Try again later.");
+    // 20 an hour per network: a whole home game signing up on one Wi-Fi fits, a flood doesn't.
+    if (!isLocal(ip) && !this.hit(`signup:${ip}`, 20, 60 * 60 * 1000)) throw new AuthError(429, "too_many", "Too many new accounts from here. Try again later.");
     if (!LIMITS.usernameRe.test(username)) throw new AuthError(400, "bad_username", "Username: 2–20 letters, numbers or _");
     if (!LIMITS.pinRe.test(pin)) throw new AuthError(400, "bad_pin", "PIN must be 4–6 digits");
     const exists = this.sql.exec("SELECT id FROM users WHERE username = ?", username).toArray();
@@ -145,7 +151,7 @@ export class AccountsDO extends DurableObject<Env> {
     // A per-network cap on failures (across all usernames) slows down spraying.
     const key = `${username.toLowerCase()}|${ip}`;
     const ipRow = this.sql.exec<{ count: number; window_start: number }>("SELECT count, window_start FROM rate WHERE key = ?", `loginfail:${ip}`).toArray()[0];
-    if (ipRow && now - ipRow.window_start < 60 * 60 * 1000 && ipRow.count >= 30) {
+    if (!isLocal(ip) && ipRow && now - ipRow.window_start < 60 * 60 * 1000 && ipRow.count >= 30) {
       throw new AuthError(429, "locked", "Too many failed logins from here. Try again later.");
     }
     const att = this.sql.exec<{ failures: number; locked_until: number }>(

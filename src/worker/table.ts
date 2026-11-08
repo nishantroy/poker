@@ -73,6 +73,8 @@ interface Meta {
   endPending: boolean;
   /** Hand numbers whose rabbit hunt was revealed (replays show the rabbit only for these, or when unlocked). */
   rabbitShownHands: number[];
+  /** Seats that chose to show their cards after the current hand ended. */
+  shown: { hand: number; seats: number[] };
 }
 
 interface Attachment {
@@ -81,7 +83,7 @@ interface Attachment {
 }
 
 const RUNOUT_PAUSE_MS = 1400;
-const NEXT_HAND_DELAY_MS = 3500;
+const NEXT_HAND_DELAY_MS = 4500;
 const NEXT_HAND_DELAY_SHOWDOWN_MS = 6000;
 const DISCARD_TIMER_MS = 20_000;
 const RUN_CHOICE_MS = 12_000;
@@ -192,7 +194,7 @@ export class TableDO extends DurableObject<Env> {
           votes: m.votes ?? {}, rabbitShown: m.rabbitShown ?? null, pendingConfig: m.pendingConfig ?? null, autoSatOut: m.autoSatOut ?? [],
           flags: normalizeFlags(m.flags), ghostVote: m.ghostVote ?? null, lastTaunt: m.lastTaunt ?? {},
           gameChoice: m.gameChoice ?? null, gameChosenFor: m.gameChosenFor ?? 0, orbitLeft: m.orbitLeft ?? 0, firstButton: m.firstButton ?? null,
-          lastActions: m.lastActions ?? {}, endPending: m.endPending ?? false, rabbitShownHands: m.rabbitShownHands ?? [],
+          lastActions: m.lastActions ?? {}, endPending: m.endPending ?? false, rabbitShownHands: m.rabbitShownHands ?? [], shown: m.shown ?? { hand: 0, seats: [] },
         } as Meta;
       }
       if (r.key === "game") {
@@ -240,7 +242,7 @@ export class TableDO extends DurableObject<Env> {
       createdAt: Date.now(), timer: null, rebuyRequests: [], departed: [], logSeq: 0, chatSeq: 0, leaving: [],
       pendingConfig: null, autoSatOut: [], options: defaultOptions(), hud: {}, cur: null, unlocked: [], votes: {}, rabbitShown: null,
       flags: args.flags ? normalizeFlags(args.flags) : defaultFlags(),
-      ghostVote: null, lastTaunt: {}, gameChoice: null, gameChosenFor: 0, orbitLeft: 0, firstButton: null, lastActions: {}, endPending: false, rabbitShownHands: [],
+      ghostVote: null, lastTaunt: {}, gameChoice: null, gameChosenFor: 0, orbitLeft: 0, firstButton: null, lastActions: {}, endPending: false, rabbitShownHands: [], shown: { hand: 0, seats: [] },
     };
     this.game = createGame(validateConfig(args.config));
     this.log("system", `Table created by ${args.hostName}.`);
@@ -499,6 +501,28 @@ export class TableDO extends DurableObject<Env> {
         this.finishGameChoice(msg.variant, "picked");
         if (meta.status === "running" && !isHandLive(g)) this.beginHand();
         else this.afterChange();
+        return;
+      }
+
+      case "show": {
+        // Show your own cards once the hand is over (e.g. after everyone folded to you, or after you folded).
+        requireFlag(meta.flags.showCards);
+        const g = this.game!;
+        const h = g.hand;
+        const seat = this.seatOf(att.userId);
+        if (!h || h.phase !== "showdown" || !seat) throw new EngineError("cannot_show", "You can show your cards once the hand is over");
+        const hp = h.players.find((p) => p.seat === seat.seat);
+        if (!hp || hp.hole.length === 0) throw new EngineError("cannot_show", "You were not dealt into that hand");
+        if (meta.shown.hand !== h.number) meta.shown = { hand: h.number, seats: [] };
+        if (meta.shown.seats.includes(seat.seat) || (hp.revealed && !hp.folded)) return;
+        meta.shown.seats.push(seat.seat);
+        this.log("result", `${seat.name} shows ${hp.hole.join(" ")}`);
+        const rec = this.loadRecord(h.number);
+        if (rec) {
+          for (const p of rec.players) if (p.seat === seat.seat) p.revealed = true;
+          this.sql.exec("UPDATE hand_records SET record = ? WHERE number = ?", JSON.stringify(rec), h.number);
+        }
+        this.afterChange();
         return;
       }
 
@@ -1190,7 +1214,8 @@ export class TableDO extends DurableObject<Env> {
       const mine = s.playerId === userId;
       let cards: (Card | null)[] | null = null;
       if (hp) {
-        const visible = mine || (hp.revealed && showAll && !hp.folded);
+        const shownByChoice = !!h && h.phase === "showdown" && meta.shown.hand === h.number && meta.shown.seats.includes(s.seat);
+        const visible = mine || (hp.revealed && showAll && !hp.folded) || shownByChoice;
         cards = visible ? [...hp.hole] : hp.folded ? [] : hp.hole.map(() => null);
       }
       const shown = h?.result?.hands[s.seat];
@@ -1198,7 +1223,7 @@ export class TableDO extends DurableObject<Env> {
         seat: s.seat, playerId: s.playerId, name: s.name, stack: s.stack, status: s.status, disconnected: s.disconnected,
         isHost: s.playerId === meta.hostId, inHand: !!hp, folded: hp?.folded ?? false, allIn: hp?.allIn ?? false,
         streetBet: hp?.streetBet ?? 0, totalBet: hp?.totalBet ?? 0, cards, discarded: hp?.discarded.length ?? 0,
-        revealed: !!hp && hp.revealed && showAll, handName: shown?.name, bestCards: shown?.cards,
+        revealed: !!hp && ((hp.revealed && showAll && !hp.folded) || (!!h && h.phase === "showdown" && meta.shown.hand === h.number && meta.shown.seats.includes(s.seat))), handName: shown?.name, bestCards: shown?.cards,
         pendingAdd: s.pendingAdd, totalBuyIn: s.totalBuyIn,
         lastAction: hp && !hp.folded && h && h.phase !== "showdown" ? meta.lastActions[s.seat] ?? null : null,
       };
