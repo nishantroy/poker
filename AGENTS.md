@@ -20,3 +20,10 @@ See the root `/Users/nishantroy/code/AGENTS.md` for shared conventions (ports, w
 
 ## Validation
 - `npm run check` (types), `npm test` (engine), `npm run smoke` (needs `npm run dev` running).
+
+## Debugging (logs)
+- Workers Logs is on (`observability` in `wrangler.jsonc`). Every server log line is one JSON object from `slog()` in `src/worker/slog.ts`: `evt`, `level`, and for table events `table` (code), `hand`, `phase`, `status`.
+- Live: `npx wrangler tail poker --format json` (filter with `--search <TABLECODE>`). History (about 3 days): Cloudflare dashboard → Workers & Pages → poker → Logs, filter e.g. `table = "ABC123"`.
+- Events: `ws.connect`/`ws.close`, `msg.<type>` for every client message (actions include `seq`/`actionSeq`/`actor`), `msg.rejected` (EngineError code), `msg.crash`, `hand.start`/`hand.skip` (with `reason` and a seat snapshot)/`hand.end`, `seat.autoSitOut`, `timer.set`, `alarm`/`alarm.noop`/`alarm.crash`, `flags.apply`, `session.end`, `table.log` (mirrors the in-game log text), `auth.*`, `table.create`, `admin.flag`, `api.crash`, `client.error` (browser errors posted to `/api/client-log`).
+- Snapshot of one table's server state (admin only, live hole cards and deck hidden): `GET /api/admin/tables/<CODE>/debug`. Returns meta, game state, pending alarm time, connected sockets and the last 150 in-game log lines. The admin can open it in a logged-in browser and paste the JSON.
+- Never log PINs, session tokens or live hole cards.

@@ -98,3 +98,7 @@ public/        built client (generated, git-ignored)
 ## Out of scope (for now)
 
 Real money, tournaments, OAuth, spectator chat for non-players, hand replay UI (hand history is already stored per table).
+
+## Debugging
+
+Server logs are structured JSON in Cloudflare Workers Logs (dashboard: Workers & Pages → poker → Logs, or `npx wrangler tail poker --format json`). Filter by `table = "<CODE>"` to follow one game. Admins can open `/api/admin/tables/<CODE>/debug` for a snapshot of a table's server state. See `AGENTS.md` for the event list.

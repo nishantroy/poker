@@ -4,6 +4,7 @@ import { emptyHud } from "@engine/hud";
 import { LIMITS } from "@shared/protocol";
 import { type FlagName, type Flags, FLAG_NAMES, defaultFlags } from "@shared/flags";
 import { type Env, SESSION_TTL_MS, hashPin, randomToken, timingSafeEqual } from "./env";
+import { errFields, slog } from "./slog";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS users (
@@ -192,7 +193,7 @@ export class AccountsDO extends DurableObject<Env> {
       try {
         await this.env.TABLE.get(this.env.TABLE.idFromName(code)).setFlags(flags);
       } catch (e) {
-        console.error("flag push failed", code, e);
+        slog("error", "flags.pushFailed", { table: code, ...errFields(e) });
       }
     }));
     return flags;

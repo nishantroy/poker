@@ -12,6 +12,7 @@ import type {
 import { LIMITS, TAUNTS, TAUNT_COOLDOWN_MS, defaultOptions, validateConfig } from "@shared/protocol";
 import { type Flags, defaultFlags, normalizeFlags } from "@shared/flags";
 import { accounts, type Env } from "./env";
+import { errFields, slog, type LogFields, type LogLevel } from "./slog";
 
 interface Departed {
   userId: string;
@@ -96,6 +97,38 @@ export class TableDO extends DurableObject<Env> {
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
   }
 
+  // ---------- structured logs (see slog.ts) ----------
+
+  /** One structured log line with table context. */
+  private slog(level: LogLevel, evt: string, fields: LogFields = {}) {
+    const g = this.game;
+    slog(level, evt, { table: this.meta?.code, hand: g?.hand?.number ?? 0, phase: g?.hand?.phase ?? null, status: this.meta?.status, ...fields });
+  }
+
+  /** Compact seat snapshot for logs. Never includes cards. */
+  private seatsSnapshot() {
+    return (this.game?.seats ?? []).flatMap((s) => (s ? [{ seat: s.seat, name: s.name, stack: s.stack, status: s.status, disc: s.disconnected }] : []));
+  }
+
+  /** Admin debug snapshot: full server state with live hole cards and the deck hidden. */
+  async debugSnapshot(): Promise<unknown> {
+    if (!this.meta || !this.game) return null;
+    const g = structuredClone(this.game);
+    if (g.hand && g.hand.phase !== "showdown") {
+      g.hand.deck = [];
+      for (const p of g.hand.players) p.hole = p.hole.map(() => "??" as never);
+      if (g.hand.ghost) g.hand.ghost.hole = g.hand.ghost.hole.map(() => "??" as never);
+    } else if (g.hand) g.hand.deck = [];
+    const { hud: _hud, ...meta } = this.meta;
+    let alarmAt: number | null = null;
+    try { alarmAt = await this.ctx.storage.getAlarm(); } catch { /* ignore */ }
+    return {
+      now: Date.now(), alarmAt, meta, game: g,
+      sockets: this.ctx.getWebSockets().map((ws) => (ws.deserializeAttachment() as Attachment | null)?.name ?? "?"),
+      log: this.sql.exec<{ ts: number; hand: number; kind: string; text: string }>("SELECT ts, hand, kind, text FROM log ORDER BY id DESC LIMIT 150").toArray().reverse(),
+    };
+  }
+
   // ---------- persistence ----------
 
   private load() {
@@ -176,6 +209,7 @@ export class TableDO extends DurableObject<Env> {
     const meta = this.meta!;
     const g = this.game!;
     const changed = JSON.stringify(flags) !== JSON.stringify(meta.flags);
+    if (changed) this.slog("info", "flags.apply", { flags, pushed: announce });
     meta.flags = flags;
     // Variants off: fall back to Hold'em, from the next hand if one is live.
     const target = meta.pendingConfig ?? g.config;
@@ -218,6 +252,7 @@ export class TableDO extends DurableObject<Env> {
 
     // reconnect: clear disconnected flag
     const seat = this.seatOf(userId);
+    this.slog("info", "ws.connect", { user: name, userId, seat: seat?.seat ?? null, wasDisconnected: seat?.disconnected ?? null, autoSatOut: seat ? this.meta.autoSatOut.includes(seat.seat) : null, sockets: this.ctx.getWebSockets().length });
     if (seat && (seat.disconnected || this.meta.autoSatOut.includes(seat.seat))) {
       seat.disconnected = false;
       if (this.meta.autoSatOut.includes(seat.seat)) {
@@ -246,15 +281,24 @@ export class TableDO extends DurableObject<Env> {
     } catch {
       return this.send(ws, { t: "error", code: "bad_json", message: "Malformed message" });
     }
+    if (msg.t !== "ping" && msg.t !== "listHands" && msg.t !== "getHand") {
+      const m = msg as unknown as Record<string, unknown>;
+      const detail: LogFields = {};
+      if (msg.t === "action") Object.assign(detail, { action: msg.action.type, amount: msg.action.amount, seq: msg.seq, actor: this.game.hand?.actor ?? null, actionSeq: this.game.hand?.actionSeq ?? null });
+      else if (msg.t === "chat") detail.len = String(m.text ?? "").length;
+      else for (const [k, v] of Object.entries(m)) if (k !== "t" && (typeof v !== "object" || v === null)) detail[k] = v;
+      this.slog("info", `msg.${msg.t}`, { user: att.name, seat: this.seatOf(att.userId)?.seat ?? null, ...detail });
+    }
     try {
       this.handle(ws, att, msg);
     } catch (e) {
       if (e instanceof EngineError) {
+        this.slog("warn", "msg.rejected", { t: msg.t, user: att.name, code: e.code, message: e.message });
         this.send(ws, { t: "error", code: e.code, message: e.message });
         // resync the sender so their UI matches the server
         this.sendState(ws);
       } else {
-        console.error("table error", e);
+        this.slog("error", "msg.crash", { t: msg.t, user: att.name, ...errFields(e) });
         this.send(ws, { t: "error", code: "internal", message: "Something went wrong" });
       }
     }
@@ -271,8 +315,9 @@ export class TableDO extends DurableObject<Env> {
     const att = ws.deserializeAttachment() as Attachment | null;
     if (!att || !this.game) return;
     const others = this.ctx.getWebSockets(att.userId).filter((s) => s !== ws);
-    if (others.length) return;
     const seat = this.seatOf(att.userId);
+    this.slog("info", "ws.close", { user: att.name, seat: seat?.seat ?? null, otherSockets: others.length });
+    if (others.length) return;
     if (seat && !seat.disconnected) {
       seat.disconnected = true;
       this.save();
@@ -607,9 +652,11 @@ export class TableDO extends DurableObject<Env> {
       s.status = "sittingOut";
       if (!meta.autoSatOut.includes(s.seat)) meta.autoSatOut.push(s.seat);
       this.log("system", `${s.name} is sitting out (disconnected).`);
+      this.slog("info", "seat.autoSitOut", { seat: s.seat, user: s.name });
     }
     if (!canStartHand(g)) {
       // Stay "running": the next hand is dealt automatically once two players can play again (see schedule()).
+      this.slog("info", "hand.skip", { reason: "fewer_than_two_participants", participants: participants(g).length, seats: this.seatsSnapshot() });
       this.log("system", "Waiting for at least two players with chips.");
       this.afterChange();
       this.syncTableStatus();
@@ -620,6 +667,7 @@ export class TableDO extends DurableObject<Env> {
       res = startHand(g, undefined, { allowGhost: meta.flags.ghost });
     } catch (e) {
       if (e instanceof EngineError && e.code === "deck_short") {
+        this.slog("warn", "hand.skip", { reason: "deck_short", message: e.message, seats: this.seatsSnapshot(), config: g.config, ghost: g.ghost });
         meta.status = "waiting";
         this.log("system", `${e.message}. Someone needs to sit out, or the host can change the game.`);
         this.afterChange();
@@ -628,6 +676,11 @@ export class TableDO extends DurableObject<Env> {
       }
       throw e;
     }
+    const nh = res.state.hand!;
+    this.slog("info", "hand.start", {
+      hand: nh.number, variant: nh.variant, boards: nh.boards.length, button: nh.button, sb: nh.smallBlindSeat, bb: nh.bigBlindSeat,
+      players: nh.players.map((p) => p.seat), ghost: nh.ghost ? nh.ghost.stake : null, seats: this.seatsSnapshot(),
+    });
     this.applyStep(res.state, res.events);
   }
 
@@ -668,6 +721,10 @@ export class TableDO extends DurableObject<Env> {
     };
     this.sql.exec("INSERT OR REPLACE INTO hand_records (number, record, ended_at) VALUES (?, ?, ?)", h.number, JSON.stringify(rec), now);
     this.sql.exec("DELETE FROM hand_records WHERE number < ?", h.number - 150);
+    this.slog("info", "hand.end", {
+      durationMs: now - rec.startedAt, net: h.result?.net ?? null, ghostWon: h.result?.ghost?.won ?? null, eliminated: h.eliminated, badBeat: !!h.result?.badBeat,
+      showdown: h.result ? Object.keys(h.result.hands).length > 0 : null, seats: this.seatsSnapshot(),
+    });
     meta.cur = null;
     if (meta.options.autoUnlockReplays && !meta.unlocked.includes(h.number)) meta.unlocked.push(h.number);
     if (meta.unlocked.length > 200) meta.unlocked = meta.unlocked.slice(-200);
@@ -717,6 +774,9 @@ export class TableDO extends DurableObject<Env> {
     if (timer && prevKey === key && meta.timer && meta.timer.at > now) {
       return; // same step, timer already running
     }
+    if (key !== (prevKey ?? null)) {
+      this.slog("debug", "timer.set", { kind: timer?.kind ?? null, delayMs: timer ? timer.at - now : null, actor: h?.actor ?? null, canStart: canStartHand(g) });
+    }
     meta.timerKey = key ?? undefined;
     meta.timer = timer;
     if (timer) void this.ctx.storage.setAlarm(timer.at);
@@ -728,6 +788,7 @@ export class TableDO extends DurableObject<Env> {
     const meta = this.meta;
     if (!g || !meta || !meta.timer) return;
     const kind = meta.timer.kind;
+    this.slog("info", "alarm", { kind, lateMs: Date.now() - meta.timer.at, actor: g.hand?.actor ?? null });
     meta.timer = null;
     try {
       const h = g.hand;
@@ -743,10 +804,11 @@ export class TableDO extends DurableObject<Env> {
       } else if (kind === "nextHand" && meta.status === "running" && !isHandLive(g)) {
         this.beginHand();
       } else {
+        this.slog("info", "alarm.noop", { kind });
         this.afterChange();
       }
     } catch (e) {
-      console.error("alarm error", e);
+      this.slog("error", "alarm.crash", { kind, ...errFields(e) });
       this.afterChange();
     }
   }
@@ -849,6 +911,7 @@ export class TableDO extends DurableObject<Env> {
       h.pendingDiscard = [];
       this.log("system", "Current hand voided; bets returned.");
     }
+    this.slog("info", "session.end", { seats: this.seatsSnapshot(), departed: meta.departed.length });
     meta.status = "ended";
     meta.timer = null;
     meta.timerKey = undefined;
@@ -1018,6 +1081,7 @@ export class TableDO extends DurableObject<Env> {
     const meta = this.meta!;
     const line: LogLine = { id: ++meta.logSeq, ts: Date.now(), handNumber: this.game?.hand?.number ?? 0, text, kind };
     this.pendingLog.push(line);
+    this.slog("debug", "table.log", { kind, text });
   }
 
   private recentLog(): LogLine[] {
