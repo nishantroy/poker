@@ -115,6 +115,8 @@ export interface PublicHand {
   rabbitAvailable: boolean;
   /** Short deck (36 cards) in force for this hand. */
   shortDeck: boolean;
+  /** Red river in force for this hand. */
+  redRiver: boolean;
   /** Times the board is being run; when > 1 each entry in `boards` is one run. */
   runs: number;
   /** Open "run it twice" vote. Picks stay private; `decided` lists who has picked. */
@@ -334,7 +336,7 @@ export const LIMITS = {
 } as const;
 
 export function defaultConfig(): TableConfig {
-  return { variant: "nlhe", smallBlind: 1, bigBlind: 2, ante: 0, startingStack: 200, maxSeats: 8, actionTimerMs: 30_000, boards: 1, squid: false, maxRuns: 3, dealersChoice: "off", straddle: true, shortDeck: false };
+  return { variant: "nlhe", smallBlind: 1, bigBlind: 2, ante: 0, startingStack: 200, maxSeats: 8, actionTimerMs: 30_000, boards: 1, squid: false, maxRuns: 3, dealersChoice: "off", straddle: true, shortDeck: false, redRiver: false };
 }
 
 export function validateConfig(input: unknown): TableConfig {
@@ -358,7 +360,9 @@ export function validateConfig(input: unknown): TableConfig {
     dealersChoice: o.dealersChoice === "hand" || o.dealersChoice === "orbit" ? o.dealersChoice : "off",
     straddle: typeof o.straddle === "boolean" ? o.straddle : d.straddle,
     shortDeck: typeof o.shortDeck === "boolean" ? o.shortDeck : d.shortDeck,
+    redRiver: typeof o.redRiver === "boolean" ? o.redRiver : d.redRiver,
   };
+  if (cfg.redRiver && cfg.boards > 1) cfg.redRiver = false; // red river is for single-board games only
   if (cfg.boards === 1) cfg.squid = false;
   if (cfg.bigBlind < cfg.smallBlind) cfg.bigBlind = cfg.smallBlind;
   if (cfg.startingStack < cfg.bigBlind) cfg.startingStack = cfg.bigBlind;

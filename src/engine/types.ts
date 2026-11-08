@@ -38,6 +38,8 @@ export interface TableConfig {
   straddle: boolean;
   /** Short deck: 2s through 5s removed (36 cards); flush beats full house, trips beat a straight, A-6-7-8-9 is a straight. Not used for hi-lo games. */
   shortDeck: boolean;
+  /** Red river: a red river card is followed by another, until a black card lands; one betting round after. Single-board tables only. */
+  redRiver: boolean;
 }
 
 export type DealersChoice = "off" | "hand" | "orbit";
@@ -152,6 +154,10 @@ export interface Hand {
   actionSeq: number;
   /** Short deck in force for this hand (fixed at the deal). */
   shortDeck: boolean;
+  /** Red river in force for this hand (fixed at the deal; single board only). */
+  redRiver: boolean;
+  /** Donk'em: the no-betting super river has been dealt. */
+  superDealt: boolean;
   /** Most runs allowed this hand (from config and the runtime flag, fixed at the deal). */
   runsAllowed: number;
   /** How many times the board is being run. When > 1, `boards` holds one board per run. */
@@ -199,6 +205,7 @@ export type GameEvent =
   | { type: "badBeat"; victim: number; winner: number; equity: number }
   | { type: "returned"; seat: number; amount: number }
   | { type: "runChoiceOpened"; max: number }
+  | { type: "superRiver"; boards: Card[][] }
   | { type: "runsChosen"; runs: number }
   | { type: "handEnded"; handNumber: number }
   | { type: "timeout"; seat: number };

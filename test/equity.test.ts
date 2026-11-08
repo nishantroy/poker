@@ -66,3 +66,18 @@ describe("hi-lo equity", () => {
     expect(r.trials).toBe(36 - 8);
   });
 });
+
+describe("board shapes in equity", () => {
+  it("Donk'em counts the super river still to come", () => {
+    const donk = { holeRule: "exactly2" as const, streetCards: [2, 2, 1] as [number, number, number], superRiver: 1 };
+    const r = computeEquity(donk, [c("As Ad Kc"), c("Ks Kd 2c")], c("7h 8h 9c Tc 2s"));
+    expect(r.exact).toBe(true);
+    expect(r.trials).toBe(52 - 6 - 5);
+  });
+  it("red river simulates the extra cards", () => {
+    const r = computeEquity({ holeRule: "any" as const, redRiver: true }, [c("As Ad"), c("Ks Kd")], c("2c 7d 9h Jc"), [], { samples: 500, rng: seededRng(3) });
+    expect(r.exact).toBe(false);
+    expect(r.trials).toBe(500);
+    expect(r.equity[0]!).toBeGreaterThan(80);
+  });
+});

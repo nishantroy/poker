@@ -8,6 +8,7 @@ export interface EquityRequest {
   id: number;
   variant: Variant;
   shortDeck?: boolean;
+  redRiver?: boolean;
   /** `boards`: every board still in play at this stage; equities are averaged across them (pots split per board). */
   stages: { key: string; boards: Card[][]; seats: number[]; holes: Card[][]; dead: Card[] }[];
 }
@@ -18,9 +19,10 @@ export interface EquityResponse {
 
 self.onmessage = (ev: MessageEvent<EquityRequest>) => {
   const req = ev.data;
-  const spec = { ...VARIANTS[req.variant], shortDeck: !!req.shortDeck };
+  const base = { ...VARIANTS[req.variant], shortDeck: !!req.shortDeck, redRiver: !!req.redRiver };
   const out: EquityResponse = { id: req.id, stages: [] };
   for (const st of req.stages) {
+    const spec = { ...base, superDealt: st.key === "super" };
     if (st.holes.length < 2) {
       out.stages.push({ key: st.key, seats: st.seats, equity: st.seats.map(() => 100), exact: true });
       continue;

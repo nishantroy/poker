@@ -439,6 +439,37 @@ assert(A.errors.every((e) => e.code === "disabled" || e.code === "taunt_cooldown
   }
   assert(I.view.hand.phase === "showdown" && I.view.seats.filter(Boolean).reduce((x, s) => x + s.stack, 0) === 400, "Irish hi-lo pays out every chip at showdown");
   I.ws.close(); J.ws.close();
+  // Donk'em and red river: check every hand down to showdown, a few hands each
+  const checkDown = async (U, V, label, check) => {
+    for (let handNo = 1; handNo <= 3; handNo++) {
+      for (let i = 0; i < 40 && !(U.view.hand?.number === handNo && U.view.hand.phase === "showdown"); i++) {
+        const h = U.view.hand;
+        if (h?.phase === "betting" && h.actor !== null) { const c = h.actor === 0 ? U : V; send(c, { t: "action", seq: h.actionSeq, action: { type: c.view.me.limits?.canCheck ? "check" : "call" } }); }
+        await wait(300);
+      }
+      assert(U.view.hand.phase === "showdown" && U.view.seats.filter(Boolean).reduce((x, s) => x + s.stack, 0) === 400, `${label} hand ${handNo} reached showdown with chips conserved`);
+      check(U.view.hand);
+    }
+  };
+  const dkCode = await mk("Smoke donk", { variant: "donkem" });
+  const D1 = await connect(a, dkCode), D2 = await connect(b, dkCode);
+  send(D1, { t: "sit", seat: 0, buyIn: 200 }); send(D2, { t: "sit", seat: 1, buyIn: 200 });
+  await wait(300); send(D1, { t: "start" }); await wait(500);
+  assert(D1.view.seats[0].cards.length === 3, "Donk'em deals 3 cards");
+  await checkDown(D1, D2, "Donk'em", (h) => assert(h.boards[0].length === 6, "Donk'em showdown has a 6-card board (super river)"));
+  D1.ws.close(); D2.ws.close();
+  const rrCode = await mk("Smoke red river", { variant: "nlhe", redRiver: true });
+  const R1 = await connect(a, rrCode), R2 = await connect(b, rrCode);
+  send(R1, { t: "sit", seat: 0, buyIn: 200 }); send(R2, { t: "sit", seat: 1, buyIn: 200 });
+  await wait(300); send(R1, { t: "start" }); await wait(500);
+  assert(R1.view.hand.redRiver === true, "red river table deals red-river hands");
+  const red = (c) => c[1] === "h" || c[1] === "d";
+  await checkDown(R1, R2, "Red river", (h) => {
+    const b = h.boards[0];
+    assert(b.length >= 5 && !red(b[b.length - 1]), `red river board ends on a black card (${b.join(" ")})`);
+    assert(b.slice(4, -1).every(red), "every card between the river and the last one is red");
+  });
+  R1.ws.close(); R2.ws.close();
 }
 
 // ----- dealer's choice and running it twice -----

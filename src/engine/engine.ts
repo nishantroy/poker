@@ -5,7 +5,7 @@ import {
   type Action, type ActionLimits, type BoardHand, type GameEvent, type GameState, type Hand, type HandPlayer, type HandResult, type Pot,
   type Seat, type Street, type TableConfig, GHOST_SEAT,
 } from "./types";
-import { VARIANTS } from "./variants";
+import { VARIANTS, fullBoardSize, streetCardCount } from "./variants";
 
 export class EngineError extends Error {
   constructor(public code: string, message: string) {
@@ -96,7 +96,7 @@ export function usesShortDeck(config: Pick<TableConfig, "variant" | "shortDeck">
 export function boardsThatFit(config: TableConfig, players: number, ghost: boolean): number {
   const spec = VARIANTS[config.variant];
   const left = deckSize(usesShortDeck(config)) - spec.holeCards * (players + (ghost ? 1 : 0));
-  return Math.max(0, Math.min(config.boards ?? 1, Math.floor(left / 5)));
+  return Math.max(0, Math.min(config.boards ?? 1, Math.floor(left / fullBoardSize(spec))));
 }
 
 // ---------- helpers ----------
@@ -163,6 +163,8 @@ export interface StartOptions {
   firstButton?: number;
   /** Seats that want to straddle when they are under the gun (needs `config.straddle` and 3+ players). */
   straddleSeats?: number[];
+  /** Set false to ignore the table's red river setting this hand (operator flag). */
+  allowRedRiver?: boolean;
 }
 
 export function startHand(state: GameState, rng: Rng = cryptoRng, opts: StartOptions = {}): StepResult {
@@ -206,7 +208,10 @@ export function startHand(state: GameState, rng: Rng = cryptoRng, opts: StartOpt
     smallBlindSeat: -1, bigBlindSeat: -1, street: "preflop", phase: "betting", actor: null,
     currentBet: 0, minRaise: s.config.bigBlind, lastAggressor: null, pendingDiscard: [], result: null, actionSeq: 0,
     shortDeck,
-    runsAllowed: opts.allowRuns === false ? 1 : Math.max(1, Math.min(3, s.config.maxRuns ?? 1)), runs: 1, runChoice: null,
+    redRiver: !!s.config.redRiver && boardCount === 1 && opts.allowRedRiver !== false,
+    superDealt: false,
+    // red river hands are never run more than once (each run would need its own open-ended river)
+    runsAllowed: opts.allowRuns === false || (s.config.redRiver && boardCount === 1 && opts.allowRedRiver !== false) ? 1 : Math.max(1, Math.min(3, s.config.maxRuns ?? 1)), runs: 1, runChoice: null,
   };
   s.hand = hand;
 
@@ -499,17 +504,28 @@ export function forfeit(state: GameState, seat: number): StepResult {
   return { state: s, events };
 }
 
-/** The cards each board would have received had the hand run to the river (same order the engine deals). */
-export function rabbitBoards(hand: Pick<Hand, "boards" | "deck" | "street">): Card[][] {
+/** The cards each board would have received had the hand run to the end (same order the engine deals, including red river and the super river). */
+export function rabbitBoards(hand: Pick<Hand, "boards" | "deck" | "street" | "variant"> & Partial<Pick<Hand, "redRiver" | "superDealt">>): Card[][] {
+  const spec = VARIANTS[hand.variant];
   const deck = [...hand.deck];
   const out: Card[][] = hand.boards.map(() => []);
   let i = STREET_ORDER.indexOf(hand.street);
   while (i < STREET_ORDER.length - 1) {
     i++;
-    const n = STREET_ORDER[i] === "flop" ? 3 : 1;
-    for (const b of out) for (let k = 0; k < n; k++) b.push(deck.pop()!);
+    const st = STREET_ORDER[i] as "flop" | "turn" | "river";
+    const n = streetCardCount(spec, st);
+    for (const b of out) for (let k = 0; k < n && deck.length; k++) b.push(deck.pop()!);
+    if (st === "river" && hand.redRiver) {
+      for (const b of out) while (deck.length && isRed(b[b.length - 1])) b.push(deck.pop()!);
+    }
   }
+  if (spec.superRiver && !hand.superDealt) for (const b of out) for (let k = 0; k < spec.superRiver && deck.length; k++) b.push(deck.pop()!);
   return out;
+}
+
+/** Hearts and diamonds. */
+export function isRed(c: Card | undefined): boolean {
+  return !!c && (c[1] === "h" || c[1] === "d");
 }
 
 // ---------- internals ----------
@@ -655,8 +671,12 @@ function dealNextStreet(s: GameState, hand: Hand, events: GameEvent[]) {
   const next = STREET_ORDER[i + 1];
   if (!next) throw new EngineError("no_street", "No more streets");
   hand.street = next;
-  const n = next === "flop" ? 3 : 1;
+  const n = streetCardCount(VARIANTS[hand.variant], next as "flop" | "turn" | "river");
   for (const board of hand.boards) for (let k = 0; k < n; k++) board.push(hand.deck.pop()!);
+  // red river: keep dealing while the last card is red (until a black card, or the deck runs out)
+  if (next === "river" && hand.redRiver) {
+    for (const board of hand.boards) while (hand.deck.length && isRed(board[board.length - 1])) board.push(hand.deck.pop()!);
+  }
   resetStreet(hand, s.config.bigBlind);
   events.push({ type: "street", street: next, boards: hand.boards.map((b) => [...b]) });
   if (next === "river" && s.config.squid && hand.boards.length > 1 && hand.runs === 1) eliminateBoard(hand, events);
@@ -667,10 +687,10 @@ function dealNextStreet(s: GameState, hand: Hand, events: GameEvent[]) {
  * Not offered on multi-board hands, or while a Pineapple discard is still to come.
  */
 function offerRuns(hand: Hand, events: GameEvent[]) {
-  if ((hand.runsAllowed ?? 1) < 2 || hand.boards.length !== 1 || hand.street === "river") return;
+  if ((hand.runsAllowed ?? 1) < 2 || hand.boards.length !== 1 || hand.street === "river" || hand.redRiver) return;
   const spec = VARIANTS[hand.variant];
   if (spec.discardAfter && STREET_ORDER.indexOf(hand.street) < STREET_ORDER.indexOf(spec.discardAfter)) return;
-  const missing = 5 - hand.boards[0]!.length;
+  const missing = fullBoardSize(spec) - hand.boards[0]!.length;
   const max = Math.min(hand.runsAllowed, Math.floor(hand.deck.length / missing));
   const live = nonFolded(hand);
   if (max < 2 || live.length < 2) return;
@@ -757,6 +777,13 @@ function showdown(s: GameState, hand: Hand, events: GameEvent[]) {
   if (ghost && ghost.stake > 0) {
     if (pots.length === 0) pots.push({ amount: 0, eligible: live.map((p) => p.seat) });
     pots[0]!.amount += ghost.stake;
+  }
+
+  // Donk'em: the super river comes out (no betting) before a contested showdown
+  if (contested && spec.superRiver && !hand.superDealt) {
+    for (const b of surviving) for (let k = 0; k < spec.superRiver && hand.deck.length; k++) hand.boards[b]!.push(hand.deck.pop()!);
+    hand.superDealt = true;
+    events.push({ type: "superRiver", boards: hand.boards.map((x) => [...x]) });
   }
 
   const ghostHands: Record<number, BoardHand> = {};
@@ -876,7 +903,8 @@ function showdown(s: GameState, hand: Hand, events: GameEvent[]) {
     const headline = contested ? Object.values(ghostHands).sort((a, b) => b.score - a.score)[0]?.name ?? null : null;
     events.push({ type: "ghostShown", cards: [...ghost.hole], handName: headline, won: ghostWon });
   }
-  if (contested && !spec.hiLo && surviving.length === 1 && hand.boards[surviving[0]!]!.length === 5) {
+  // bad beats: standard 3-1-1 boards only (the check enumerates a single river card)
+  if (contested && !spec.hiLo && !spec.streetCards && !spec.superRiver && !hand.redRiver && surviving.length === 1 && hand.boards[surviving[0]!]!.length === 5) {
     const bb = detectBadBeat(hand, live, result, surviving[0]!, ghostCompetes ? ghostHands : null);
     if (bb) {
       result.badBeat = bb;
@@ -901,7 +929,7 @@ function detectBadBeat(hand: Hand, live: HandPlayer[], result: HandResult, board
   if (won.size === 0) return null;
   const dead = hand.players.flatMap((p) => (p.folded ? p.hole : p.discarded)).concat(hand.ghost?.discarded ?? []);
   const turn = hand.boards[board]!.slice(0, 4);
-  const eq = computeEquity({ ...spec, shortDeck: !!hand.shortDeck }, holes, turn, dead, { maxExact: 100 });
+  const eq = computeEquity({ holeRule: spec.holeRule, shortDeck: !!hand.shortDeck }, holes, turn, dead, { maxExact: 100 });
   let victim: number | null = null;
   let victimEq = 0;
   seats.forEach((seat, i) => {

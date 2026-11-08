@@ -1,4 +1,4 @@
-export type Variant = "nlhe" | "plo" | "plo5" | "plo6" | "plo8" | "irish" | "pineapple" | "crazy-pineapple";
+export type Variant = "nlhe" | "plo" | "plo5" | "plo6" | "plo8" | "irish" | "donkem" | "pineapple" | "crazy-pineapple";
 
 export type BettingLimit = "no-limit" | "pot-limit";
 
@@ -15,6 +15,27 @@ export interface VariantSpec {
   discardTo?: number;
   /** Split pot: half to the best high, half to the best eight-or-better low (when one qualifies). */
   hiLo?: boolean;
+  /** Board cards dealt on the flop, turn and river. Default [3, 1, 1]. */
+  streetCards?: [number, number, number];
+  /** Extra board cards dealt after the river betting, with no betting, before showdown (Donk'em's "super river"). */
+  superRiver?: number;
+}
+
+/** Cards dealt on a street (preflop deals none). */
+export function streetCardCount(spec: VariantSpec, street: "flop" | "turn" | "river"): number {
+  const c = spec.streetCards ?? [3, 1, 1];
+  return street === "flop" ? c[0] : street === "turn" ? c[1] : c[2];
+}
+
+/** Board cards up to and including the river. */
+export function riverBoardSize(spec: VariantSpec): number {
+  const c = spec.streetCards ?? [3, 1, 1];
+  return c[0] + c[1] + c[2];
+}
+
+/** Full board length at showdown (before any red-river extension). */
+export function fullBoardSize(spec: VariantSpec): number {
+  return riverBoardSize(spec) + (spec.superRiver ?? 0);
 }
 
 export const VARIANTS: Record<Variant, VariantSpec> = {
@@ -23,6 +44,7 @@ export const VARIANTS: Record<Variant, VariantSpec> = {
   plo5: { id: "plo5", name: "5-Card Pot-Limit Omaha", short: "PLO5", holeCards: 5, limit: "pot-limit", holeRule: "exactly2" },
   plo6: { id: "plo6", name: "6-Card Pot-Limit Omaha", short: "PLO6", holeCards: 6, limit: "pot-limit", holeRule: "exactly2" },
   plo8: { id: "plo8", name: "PLO Hi-Lo (8 or better)", short: "PLO8", holeCards: 4, limit: "pot-limit", holeRule: "exactly2", hiLo: true },
+  donkem: { id: "donkem", name: "Donk'em", short: "DONK", holeCards: 3, limit: "pot-limit", holeRule: "exactly2", streetCards: [2, 2, 1], superRiver: 1 },
   irish: { id: "irish", name: "Irish Hi-Lo", short: "IRISH", holeCards: 5, limit: "pot-limit", holeRule: "twoOrThree", hiLo: true },
   pineapple: {
     id: "pineapple",

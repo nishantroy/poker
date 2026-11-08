@@ -78,6 +78,18 @@ export const GAME_GUIDE: Record<Variant, GameGuide> = {
       "Lows get quartered often, since plenty of players hold an ace and a deuce.",
     ],
   },
+  donkem: {
+    tagline: "Three cards, use exactly two. A 2-2-1 board plus a free super river.",
+    rules: [
+      "Everyone gets 3 cards. Your hand is exactly 2 of yours plus exactly 3 from the board, like Omaha.",
+      "The board comes 2 cards (flop), then 2 more (turn), then 1 (river), with a betting round after each. Pot-limit.",
+      "After the river betting, a sixth card, the super river, is dealt with no betting before the showdown.",
+    ],
+    watchOut: [
+      "The super river can change everything after the betting is done, so a made hand on the river isn't safe.",
+      "With 3 hole cards and exactly 2 to use, you'll often have a choice of which pair of cards plays.",
+    ],
+  },
   pineapple: {
     tagline: "Three cards, throw one away before the flop.",
     rules: [
@@ -130,6 +142,15 @@ export const HOUSE_RULES: HouseRule[] = [
       "A host setting that works with every game except PLO Hi-Lo: the 2s through 5s are removed, leaving 36 cards.",
       "A flush beats a full house, three of a kind beats a straight, and A-6-7-8-9 counts as a straight (the ace plays low).",
       "Fewer cards also means fewer players and boards fit, so 5- and 6-card Omaha seat fewer people.",
+    ],
+  },
+  {
+    id: "redRiver",
+    title: "Red river",
+    body: [
+      "A host setting for any single-board game. When the river card is red (hearts or diamonds), another card is dealt, and this repeats until a black card lands.",
+      "All of those cards are part of the board. There is one betting round once the black card is out.",
+      "Hands are made the usual way for the game, from the bigger board. Red-river hands are always run once.",
     ],
   },
   {

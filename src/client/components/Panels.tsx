@@ -205,7 +205,8 @@ export function HostPanel({ open, onClose, view, send }: { open: boolean; onClos
             <Field label="Max buy-in"><input className="input" type="number" inputMode="numeric" min={1} value={cfg.startingStack} onChange={num("startingStack")} /></Field>
             <Field label="Timer (s)"><input className="input" type="number" inputMode="numeric" min={5} max={300} value={Math.round(cfg.actionTimerMs / 1000)} onChange={(e) => set("actionTimerMs", Number(e.target.value) * 1000)} /></Field>
           </div>
-          {view.flags.squid && <BoardsPicker boards={cfg.boards} squid={cfg.squid} onChange={(b, sq) => setCfg((c) => ({ ...c, boards: b, squid: sq }))} />}
+          {view.flags.squid && <BoardsPicker boards={cfg.boards} squid={cfg.squid} onChange={(b, sq) => setCfg((c) => ({ ...c, boards: b, squid: sq, redRiver: b > 1 ? false : c.redRiver }))} />}
+          {view.flags.redRiver && cfg.boards === 1 && <Toggle label="Red river" hint="When the river is red, keep dealing until a black card lands. One betting round after. Single board only; never run twice." checked={cfg.redRiver} onChange={(v) => set("redRiver", v)} />}
           {view.flags.runItTwice && <RunsPicker value={cfg.maxRuns} onChange={(n) => set("maxRuns", n)} />}
           {view.flags.shortDeck && <Toggle label="Short deck (6+)" hint={`Removes the 2s through 5s (36 cards). Flush beats full house, trips beat a straight, A-6-7-8-9 is a straight.${VARIANTS[cfg.variant].hiLo ? " Not used for PLO Hi-Lo, which always plays the full deck." : ""}`} checked={cfg.shortDeck} onChange={(v) => set("shortDeck", v)} />}
           {view.flags.straddle && <Toggle label="Allow straddles" hint="Under the gun may post 2× the big blind before the deal and act last preflop." checked={cfg.straddle} onChange={(v) => set("straddle", v)} />}

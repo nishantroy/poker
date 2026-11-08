@@ -1,7 +1,7 @@
 import { createGame, seatPlayer, startHand, applyAction, type GameState, type TableConfig, type GameEvent, type Card, type Rng, type Variant } from "@engine/index";
 
 export const baseConfig: TableConfig = {
-  variant: "nlhe", smallBlind: 5, bigBlind: 10, ante: 0, startingStack: 1000, maxSeats: 8, actionTimerMs: 30000, boards: 1, squid: false, maxRuns: 1, dealersChoice: "off", straddle: true, shortDeck: false,
+  variant: "nlhe", smallBlind: 5, bigBlind: 10, ante: 0, startingStack: 1000, maxSeats: 8, actionTimerMs: 30000, boards: 1, squid: false, maxRuns: 1, dealersChoice: "off", straddle: true, shortDeck: false, redRiver: false,
 };
 
 export function table(stacks: number[], cfg: Partial<TableConfig> = {}): GameState {

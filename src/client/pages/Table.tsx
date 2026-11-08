@@ -5,7 +5,7 @@ import type { Action, PublicSeat, TableView } from "@shared/protocol";
 import { TAUNTS } from "@shared/protocol";
 import { GHOST_SEAT } from "@engine/types";
 import { playSfx, vibrate, type Sfx } from "../lib/sfx";
-import { VARIANTS } from "@engine/variants";
+import { VARIANTS, fullBoardSize } from "@engine/variants";
 import { useTable } from "../lib/socket";
 import { fmtChips } from "../lib/format";
 import { Link } from "../lib/router";
@@ -222,7 +222,10 @@ export function TablePage({ code }: { code: string }) {
   const boardCount = hand?.boards.length ?? 1;
   // several boards stack vertically, so their cards shrink to keep the centre column clear of the side seats
   const boardCap = landscape ? [64, 48, 40] : [64, 34, 28];
-  const boardSize = Math.max(boardCount > 1 ? 24 : 34, Math.min(boardCap[Math.min(boardCount, 3) - 1]!, Math.floor((feltWidth - 56) / 5 - 6)));
+  // slots per board: 5 normally, 6 for Donk'em; a red river can run longer, so cards shrink (and wrap past 8)
+  const slots = Math.max(fullBoardSize(variant), ...(hand?.boards.map((b, i) => b.length + (hand.rabbit?.[i]?.length ?? 0)) ?? [0]));
+  const perRow = Math.min(slots, 8);
+  const boardSize = Math.max(boardCount > 1 || perRow > 5 ? 24 : 34, Math.min(boardCap[Math.min(boardCount, 3) - 1]!, Math.floor((feltWidth - (perRow > 5 ? 40 : 56)) / perRow - 8)));
   const ghost = hand?.ghost ?? null;
   const badBeat = hand?.result?.badBeat ?? null;
   const seatName = (seat: number) => (seat === GHOST_SEAT ? "Ghost" : view.seats[seat]?.name ?? "");
@@ -239,7 +242,7 @@ export function TablePage({ code }: { code: string }) {
         <Link to="/" className="btn btn-ghost btn-sm -ml-2 px-2" aria-label="Lobby">
           <span className="font-extrabold tracking-wider text-gradient-gold" style={{ fontFamily: "var(--font-display)" }}>{APP_MARK}</span>
         </Link>
-        <button className="pill pill-gold shrink-0 num min-h-[32px]" onClick={() => setRulesOpen(true)} aria-label={`How to play ${variant.name}`}>{view.dealerChoice && <Dices size={12} className="inline -mt-0.5 mr-1" aria-label="Dealer's choice" />}{variant.short}{(hand ? hand.shortDeck : view.config.shortDeck && !variant.hiLo) ? " 6+" : ""} {view.config.smallBlind}/{view.config.bigBlind}</button>
+        <button className="pill pill-gold shrink-0 num min-h-[32px]" onClick={() => setRulesOpen(true)} aria-label={`How to play ${variant.name}`}>{view.dealerChoice && <Dices size={12} className="inline -mt-0.5 mr-1" aria-label="Dealer's choice" />}{variant.short}{(hand ? hand.shortDeck : view.config.shortDeck && !variant.hiLo) ? " 6+" : ""}{(hand ? hand.redRiver : view.config.redRiver) && <span className="inline-block w-2 h-2 rounded-full bg-[#ff3b5c] ml-1 align-middle" role="img" aria-label="Red river" />} {view.config.smallBlind}/{view.config.bigBlind}</button>
         <button className="flex items-center gap-2 min-w-0 flex-1 text-left" onClick={copyLink} aria-label={`Copy table link (code ${code})`}>
           <span className={`truncate font-bold text-sm min-w-0 ${copied ? "" : "hidden sm:inline"}`}>{copied ? <span className="text-green-bright">Link copied</span> : view.name}</span>
           <Link2 size={13} className="text-dim shrink-0" aria-hidden="true" />
@@ -301,8 +304,8 @@ export function TablePage({ code }: { code: string }) {
                   {hand.boards.map((board, bi) => {
                     const bestCards = showdown && bottomWinner ? hand.result?.pots.flatMap((p) => p.winners).find((w) => w.seat === bottomWinner[0] && (w.board ?? 0) === bi)?.cards : undefined;
                     return (
-                      <div key={bi} className={`flex gap-1.5 ${hand.eliminated === bi ? "board-out rounded-md" : ""}`}>
-                        {Array.from({ length: 5 }, (_, i) => {
+                      <div key={bi} className={`flex flex-wrap justify-center gap-1.5 ${hand.eliminated === bi ? "board-out rounded-md" : ""}`} style={{ maxWidth: perRow * (boardSize + 6) }}>
+                        {Array.from({ length: slots }, (_, i) => {
                           const c = board[i];
                           const r = hand.rabbit?.[bi]?.[i - board.length];
                           if (!c && r) return <div key={r} className="relative"><PlayingCard card={r} size={boardSize} deal dim /><span className="absolute -top-2 left-1/2 -translate-x-1/2 pill text-[9px] px-1.5 py-0"><Rabbit size={10} aria-hidden="true" /></span></div>;

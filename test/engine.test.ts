@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { advance, applyAction, canStartHand, chooseRuns, computePots, forfeit, getLimits, startHand, timeout, EngineError, setGhost, squidLoser, GHOST_SEAT } from "@engine/index";
 import { table, startRigged, act, stacks, awards, fixedRng } from "./helpers";
-import { boardsThatFit, createGame, seatPlayer } from "@engine/index";
+import { boardsThatFit, createGame, rabbitBoards, seatPlayer } from "@engine/index";
 import { baseConfig } from "./helpers";
 
 describe("hand setup", () => {
@@ -796,5 +796,92 @@ describe("Irish hi-lo", () => {
     expect(w).toContainEqual(expect.objectContaining({ seat: 1, half: "high", amount: 1000 }));
     expect(w).toContainEqual(expect.objectContaining({ seat: 0, half: "low", amount: 1000, handName: "6-4-3-2-A low" }));
     expect(stacks(s)).toEqual([1000, 1000]);
+  });
+});
+
+describe("Donk'em", () => {
+  // heads-up: seat 0 is the button/small blind and acts first preflop; seat 1 acts first after
+  const checkDown = (s: ReturnType<typeof startRigged>["state"]) => {
+    for (let i = 0; i < 20 && s.hand!.phase === "betting"; i++) {
+      const seat = s.hand!.actor!;
+      s = act(s, seat, getLimits(s, seat).canCheck ? "check" : "call").state;
+    }
+    return s;
+  };
+  it("deals 2, 2 and 1 with betting, then a super river with no betting before showdown", () => {
+    // seat 0: As Ks Qd; seat 1: 9h 9c 2d
+    let s = startRigged(table([1000, 1000], { variant: "donkem" }), 0, "As 9h Ks 9c Qd 2d  Js Ts  4h 5c  7d  3s").state;
+    expect(s.hand!.players.every((p) => p.hole.length === 3)).toBe(true);
+    s = act(s, 0, "call").state;
+    s = act(s, 1, "check").state;
+    expect(s.hand!.boards[0]).toEqual(["Js", "Ts"]);
+    s = act(s, 1, "check").state; s = act(s, 0, "check").state;
+    expect(s.hand!.boards[0]).toHaveLength(4);
+    s = act(s, 1, "check").state;
+    const last = act(s, 0, "check"); // turn done: river (1 card)
+    s = last.state;
+    expect(s.hand!.street).toBe("river");
+    expect(s.hand!.boards[0]).toHaveLength(5);
+    s = act(s, 1, "check").state;
+    const r = act(s, 0, "check"); // river betting over: super river, then showdown
+    expect(r.events.some((e) => e.type === "superRiver")).toBe(true);
+    expect(r.state.hand!.phase).toBe("showdown");
+    expect(r.state.hand!.boards[0]).toEqual(["Js", "Ts", "4h", "5c", "7d", "3s"]);
+    // seat 1 has nines through the river, but the super river 3s gives seat 0 a spade flush (As Ks + Js Ts 3s)
+    expect(r.state.hand!.result!.hands[1]!.name).toBe("Pair of Nines");
+    expect(r.state.hand!.result!.hands[0]!.name).toBe("Flush, Ace high");
+    expect(stacks(r.state)).toEqual([1010, 990]);
+  });
+  it("no super river when everyone folds, and the rabbit includes it", () => {
+    let s = startRigged(table([1000, 1000], { variant: "donkem" }), 0, "As 9h Ks 9c Qd 2d  Js Ts  4h 5c  7d  3s").state;
+    s = act(s, 0, "call").state;
+    s = act(s, 1, "check").state;
+    const r = act(s, 1, "bet", 10);
+    s = act(r.state, 0, "fold").state;
+    expect(s.hand!.phase).toBe("showdown");
+    expect(s.hand!.boards[0]).toHaveLength(2);
+    expect(rabbitBoards(s.hand!)[0]).toEqual(["4h", "5c", "7d", "3s"]);
+  });
+  it("uses exactly two hole cards", () => {
+    // three spades in hand + three on board would be a flush with any-rule; exactly-2 needs 3 board spades (there are 3)
+    let s = startRigged(table([1000, 1000], { variant: "donkem" }), 0, "As Kd Ks Qd 2s 3d  Js Ts  9s 4c  8h  7c").state;
+    s = checkDown(s);
+    expect(s.hand!.result!.hands[0]!.name).toMatch(/^Flush/);
+    expect(s.hand!.result!.hands[0]!.cards.filter((c) => ["As", "Ks", "2s"].includes(c))).toHaveLength(2);
+  });
+});
+
+describe("red river", () => {
+  const redTable = (cfg = {}) => table([1000, 1000], { redRiver: true, ...cfg });
+  it("keeps dealing after a red river until a black card, then one betting round", () => {
+    // flop Ks 7c 2d, turn 9c, river 4h (red) -> 6d (red) -> Jc (black)
+    let s = startRigged(redTable(), 0, "As Qh Ad Qd  Ks 7c 2d  9c  4h 6d Jc 3s").state;
+    expect(s.hand!.redRiver).toBe(true);
+    for (let i = 0; i < 20 && s.hand!.street !== "river"; i++) {
+      const seat = s.hand!.actor!;
+      s = act(s, seat, getLimits(s, seat).canCheck ? "check" : "call").state;
+    }
+    expect(s.hand!.boards[0]).toEqual(["Ks", "7c", "2d", "9c", "4h", "6d", "Jc"]);
+    expect(s.hand!.phase).toBe("betting"); // one betting round after the black card
+    s = act(s, 1, "check").state;
+    s = act(s, 0, "check").state;
+    expect(s.hand!.phase).toBe("showdown");
+  });
+  it("a black river is a normal river", () => {
+    let s = startRigged(redTable(), 0, "As Qh Ad Qd  Ks 7c 2d  9c  4s 6d").state;
+    for (let i = 0; i < 20 && s.hand!.street !== "river"; i++) {
+      const seat = s.hand!.actor!;
+      s = act(s, seat, getLimits(s, seat).canCheck ? "check" : "call").state;
+    }
+    expect(s.hand!.boards[0]).toHaveLength(5);
+  });
+  it("is never run twice, never used with several boards, and the rabbit follows it", () => {
+    let s = startRigged(table([1000, 1000, 1000], { redRiver: true, maxRuns: 3 }), 0).state;
+    expect(s.hand!.runsAllowed).toBe(1);
+    expect(startHand(table([1000, 1000], { redRiver: true, boards: 2 }), fixedRng(0)).state.hand!.redRiver).toBe(false);
+    expect(startHand(table([1000, 1000], { redRiver: true }), fixedRng(0), { allowRedRiver: false }).state.hand!.redRiver).toBe(false);
+    s = startRigged(redTable(), 0, "As Qh Ad Qd  Ks 7c 2d  9c  4h 6d Jc").state;
+    s = act(s, 0, "fold").state;
+    expect(rabbitBoards(s.hand!)[0]).toEqual(["Ks", "7c", "2d", "9c", "4h", "6d", "Jc"]);
   });
 });

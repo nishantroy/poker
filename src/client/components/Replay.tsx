@@ -137,7 +137,7 @@ function StageBlock({ st, rec, eq, name, mySeat, locked, equityOn }: { st: Stage
   return (
     <section className="card-surface p-3 space-y-2">
       <div className="flex items-start gap-3">
-        <h4 className="text-xs uppercase tracking-wider text-dim font-semibold w-14 pt-1">{streetLabel(st.street)}</h4>
+        <h4 className="text-xs uppercase tracking-wider text-dim font-semibold w-14 pt-1">{st.label ?? streetLabel(st.street)}</h4>
         <div className="flex flex-col gap-1">
           {st.boards.map((b, i) => (
             <div key={i} className={`flex gap-1 ${st.eliminated === i ? "board-out rounded-md" : ""}`}>{b.map((c) => <PlayingCard key={c} card={c} size={30} />)}</div>

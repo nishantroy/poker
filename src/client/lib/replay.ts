@@ -13,6 +13,8 @@ export interface Stage {
   key: string;
   street: Street;
   boards: Card[][];
+  /** Overrides the street name (e.g. "Super river"). */
+  label?: string;
   /** Squid Game: board eliminated at this point (river stage only). */
   eliminated: number | null;
   /** players still in the hand when this street was dealt (GHOST_SEAT for the ghost) */
@@ -50,6 +52,11 @@ export function buildStages(rec: HandRecordView): Stage[] {
       stages.push(cur);
       continue;
     }
+    if (e.type === "superRiver") {
+      cur = { key: "super", street: "river", label: "Super river", boards: e.boards.map((b) => [...b]), eliminated: null, seats: [...alive], actions: [], foldedHere: [] };
+      stages.push(cur);
+      continue;
+    }
     if (e.type === "boardEliminated") {
       cur.eliminated = e.board;
       continue;
@@ -70,7 +77,7 @@ export function equityRequest(rec: HandRecordView, stages: Stage[], id: number):
   for (const p of rec.players) cardsOf.set(p.seat, p.hole.every((c): c is Card => c !== null) ? (p.hole as Card[]) : null);
   if (rec.ghost) cardsOf.set(GHOST_SEAT, rec.ghost.hole);
   const allKnown = [...cardsOf.values()].flatMap((c) => c ?? []).concat(rec.ghost?.discarded ?? []);
-  const req: EquityRequest = { id, variant: rec.variant, shortDeck: !!rec.shortDeck, stages: [] };
+  const req: EquityRequest = { id, variant: rec.variant, shortDeck: !!rec.shortDeck, redRiver: !!rec.redRiver, stages: [] };
   for (const st of stages) {
     const holes: Card[][] = [];
     for (const seat of st.seats) {

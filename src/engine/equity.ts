@@ -33,7 +33,14 @@ function combos(arr: Card[], k: number, fn: (c: Card[]) => void) {
  * so they are not dealt again. Exact enumeration when the remaining run-outs are few; otherwise Monte Carlo.
  */
 export function computeEquity(
-  spec: Pick<VariantSpec, "holeRule"> & { hiLo?: boolean; shortDeck?: boolean },
+  spec: Pick<VariantSpec, "holeRule"> & Partial<Pick<VariantSpec, "streetCards" | "superRiver">> & {
+    hiLo?: boolean;
+    shortDeck?: boolean;
+    /** Red river: a red river card is followed by more cards until a black one. */
+    redRiver?: boolean;
+    /** Donk'em: whether the super river is already on `board`. */
+    superDealt?: boolean;
+  },
   holes: Card[][],
   board: Card[],
   dead: Card[] = [],
@@ -43,7 +50,14 @@ export function computeEquity(
   const known = new Set<Card>([...board, ...dead, ...holes.flat()]);
   const deck = freshDeck(!!spec.shortDeck && !spec.hiLo).filter((c) => !known.has(c));
   const rules = { shortDeck: !!spec.shortDeck && !spec.hiLo };
-  const need = 5 - board.length;
+  const riverSize = (spec.streetCards ?? [3, 1, 1]).reduce((a, b) => a + b, 0);
+  const sup = spec.superRiver ?? 0;
+  // With red river, cards after the river are open-ended, so the board is completed by simulation;
+  // once the river (and its red extension) is out, only the super river is left to come.
+  const redPending = !!spec.redRiver && board.length < riverSize;
+  const need = !spec.redRiver
+    ? Math.max(0, riverSize + sup - board.length)
+    : board.length >= riverSize ? (spec.superDealt ? 0 : sup) : -1;
   const win = new Array<number>(n).fill(0);
   const tie = new Array<number>(n).fill(0);
   const share = new Array<number>(n).fill(0);
@@ -83,6 +97,21 @@ export function computeEquity(
   if (need === 0) {
     scoreRunout(board);
     return finish(true);
+  }
+
+  if (redPending) {
+    const rng = opts.rng ?? cryptoRng;
+    const samples = opts.samples ?? 3000;
+    for (let s = 0; s < samples; s++) {
+      const pool = [...deck];
+      const draw = () => pool.splice(rng(pool.length), 1)[0]!;
+      const full = [...board];
+      while (full.length < riverSize && pool.length) full.push(draw());
+      while (pool.length && (full[full.length - 1]![1] === "h" || full[full.length - 1]![1] === "d")) full.push(draw());
+      if (!spec.superDealt) for (let k = 0; k < sup && pool.length; k++) full.push(draw());
+      scoreRunout(full);
+    }
+    return finish(false);
   }
 
   // count possible run-outs

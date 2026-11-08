@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import {
-  EngineError, GHOST_SEAT, VARIANTS, advance, applyAction, boardsThatFit, canStartHand, chooseRuns, cryptoRng, nextButtonSeat, computePots, createGame, forfeit, getLimits, isHandLive,
+  EngineError, GHOST_SEAT, VARIANTS, riverBoardSize, advance, applyAction, boardsThatFit, canStartHand, chooseRuns, cryptoRng, nextButtonSeat, computePots, createGame, forfeit, getLimits, isHandLive,
   participants, rabbitBoards, removePlayer, seatPlayer, setGhost, startHand, timeout,
   type GameEvent, type GameState, type TableConfig, type Variant,
 } from "@engine/index";
@@ -210,6 +210,8 @@ export class TableDO extends DurableObject<Env> {
           g.hand.ghost ??= null;
           g.hand.runs ??= 1;
           g.hand.shortDeck ??= false;
+          g.hand.redRiver ??= false;
+          g.hand.superDealt ??= false;
           g.hand.runsAllowed ??= 1;
           g.hand.runChoice ??= null;
           if (g.hand.result) {
@@ -294,6 +296,12 @@ export class TableDO extends DurableObject<Env> {
       if (isHandLive(g)) meta.pendingConfig = cfg;
       else g.config = cfg;
       this.log("system", `Short deck is switched off for now; this table uses the full deck${isHandLive(g) ? " from the next hand" : ""}.`);
+    }
+    const target4 = meta.pendingConfig ?? g.config;
+    if (!flags.redRiver && target4.redRiver) {
+      const cfg = { ...target4, redRiver: false };
+      if (isHandLive(g)) meta.pendingConfig = cfg;
+      else g.config = cfg;
     }
     if (!flags.ghost && meta.ghostVote) meta.ghostVote = null;
     if (changed && announce) this.afterChange();
@@ -654,6 +662,8 @@ export class TableDO extends DurableObject<Env> {
         if (merged.smallBlind !== g.config.smallBlind || merged.bigBlind !== g.config.bigBlind) changes.push(`blinds → ${merged.smallBlind}/${merged.bigBlind}`);
         if (merged.ante !== g.config.ante) changes.push(`ante → ${merged.ante}`);
         if (!meta.flags.shortDeck && merged.shortDeck) throw new EngineError("disabled", "Short deck is switched off right now");
+        if (!meta.flags.redRiver && merged.redRiver) throw new EngineError("disabled", "Red river is switched off right now");
+        if (merged.redRiver !== g.config.redRiver) changes.push(merged.redRiver ? "red river" : "no red river");
         if (merged.shortDeck !== g.config.shortDeck) changes.push(merged.shortDeck ? "short deck (no 2s-5s)" : "full deck");
         if (merged.straddle !== g.config.straddle) changes.push(merged.straddle ? "straddles allowed" : "no straddles");
         if (merged.maxRuns !== g.config.maxRuns) changes.push(merged.maxRuns === 1 ? "run it once only" : `run it up to ${merged.maxRuns === 2 ? "twice" : "three times"}`);
@@ -828,7 +838,7 @@ export class TableDO extends DurableObject<Env> {
       const straddleSeats = meta.flags.straddle
         ? g.seats.flatMap((st) => (st && meta.straddlers.includes(st.playerId) ? [st.seat] : []))
         : [];
-      res = startHand(g, undefined, { allowGhost: meta.flags.ghost, allowRuns: meta.flags.runItTwice, firstButton: meta.firstButton ?? undefined, straddleSeats });
+      res = startHand(g, undefined, { allowGhost: meta.flags.ghost, allowRuns: meta.flags.runItTwice, firstButton: meta.firstButton ?? undefined, straddleSeats, allowRedRiver: meta.flags.redRiver });
     } catch (e) {
       if (e instanceof EngineError && e.code === "deck_short") {
         this.slog("warn", "hand.skip", { reason: "deck_short", message: e.message, seats: this.seatsSnapshot(), config: g.config, ghost: g.ghost });
@@ -949,7 +959,7 @@ export class TableDO extends DurableObject<Env> {
         seat: p.seat, playerId: p.playerId, name: g.seats[p.seat]?.name ?? "?", hole: [...p.hole], discarded: [...p.discarded],
         startStack: meta.cur?.startStacks[p.seat] ?? 0, revealed: p.revealed && !p.folded, folded: p.folded,
       })),
-      boards: h.boards.map((b) => [...b]), eliminated: h.eliminated, shortDeck: !!h.shortDeck, rabbit: rabbitBoards(h), events: meta.cur?.events ?? [], result: h.result,
+      boards: h.boards.map((b) => [...b]), eliminated: h.eliminated, shortDeck: !!h.shortDeck, redRiver: !!h.redRiver, rabbit: rabbitBoards(h), events: meta.cur?.events ?? [], result: h.result,
       ghost: h.ghost ? { hole: [...h.ghost.hole], discarded: [...h.ghost.discarded], stake: h.ghost.stake, won: h.result?.ghost?.won ?? 0 } : null,
       startedAt: meta.cur?.startedAt ?? now, endedAt: now,
     };
@@ -1322,10 +1332,11 @@ export class TableDO extends DurableObject<Env> {
           rabbit: h.phase === "showdown" && meta.rabbitShown === h.number ? rabbitBoards(h) : null,
           runs: h.runs ?? 1,
           shortDeck: !!h.shortDeck,
+          redRiver: !!h.redRiver,
           runChoice: h.runChoice
             ? { max: h.runChoice.max, pending: [...h.runChoice.pending], decided: Object.keys(h.runChoice.choices).map(Number), mine: mySeat ? h.runChoice.choices[mySeat.seat] ?? null : null }
             : null,
-          rabbitAvailable: h.phase === "showdown" && h.boards[0]!.length < 5 && meta.flags.rabbitHunt && meta.options.rabbitHunt && meta.rabbitShown !== h.number && !!mySeat,
+          rabbitAvailable: h.phase === "showdown" && rabbitBoards(h).some((b) => b.length > 0) && meta.flags.rabbitHunt && meta.options.rabbitHunt && meta.rabbitShown !== h.number && !!mySeat,
         }
       : null;
 
@@ -1442,8 +1453,13 @@ export class TableDO extends DurableObject<Env> {
         case "timeout":
           this.log("system", `${name(e.seat)} timed out`);
           break;
-        case "street":
-          this.log("street", `${e.street[0]!.toUpperCase() + e.street.slice(1)}: ${e.boards.map((b) => b.join(" ")).join("  |  ")}`);
+        case "street": {
+          const red = e.street === "river" && state.hand?.redRiver && (e.boards[0]?.length ?? 0) > riverBoardSize(VARIANTS[state.hand.variant]);
+          this.log("street", `${e.street[0]!.toUpperCase() + e.street.slice(1)}: ${e.boards.map((b) => b.join(" ")).join("  |  ")}${red ? "  🔴 red river!" : ""}`);
+          break;
+        }
+        case "superRiver":
+          this.log("street", `Super river: ${e.boards.map((b) => b[b.length - 1] ?? "").join("  |  ")}`);
           break;
         case "boardEliminated":
           this.log("street", `🦑 Board ${e.board + 1} is eliminated (lowest river: ${e.river}).`);

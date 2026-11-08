@@ -23,6 +23,7 @@ export const FLAG_DEFS = {
   taunts: { label: "Taunts", hint: "Quick canned taunts shown as speech bubbles at the table.", server: true },
   runItTwice: { label: "Run it twice", hint: "All-in players can agree to run the rest of the board two or three times. Off: always once.", server: true },
   shortDeck: { label: "Short deck", hint: "Host toggle that removes the 2s through 5s (36 cards) for any game except PLO Hi-Lo. Off: full deck from the next hand.", server: true },
+  redRiver: { label: "Red river", hint: "Host toggle: a red river is followed by more cards until a black one. Off: normal rivers from the next hand.", server: true },
   straddle: { label: "Straddle", hint: "Under the gun can post a voluntary third blind of 2x the big blind. Off: no straddles.", server: true },
   showCards: { label: "Show cards", hint: "After a hand ends, players can choose to show their hole cards to the table.", server: true },
   feedback: { label: "Feedback button", hint: "Players can send bug reports and ideas, filed as GitHub issues.", server: true },
