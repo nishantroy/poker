@@ -67,6 +67,14 @@ export interface PublicSeat {
   bestCards?: Card[];
   pendingAdd: number;
   totalBuyIn: number;
+  /** Most recent action on the current street (cleared when the next street is dealt). */
+  lastAction: SeatAction | null;
+}
+
+export interface SeatAction {
+  type: "check" | "call" | "bet" | "raise" | "allin";
+  /** Chips: amount called, or the street bet after a bet/raise. */
+  amount: number;
 }
 
 export interface PublicPot {

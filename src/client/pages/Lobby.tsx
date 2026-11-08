@@ -1,4 +1,4 @@
-import { ArrowRight, Crown, LayoutGrid, LogOut, Plus, Trophy, User, Users } from "lucide-react";
+import { ArrowRight, Crown, LayoutGrid, LogOut, MessageSquarePlus, Plus, Trophy, User, Users } from "lucide-react";
 import { APP_NAME } from "@shared/brand";
 import { useEffect, useState, type FormEvent } from "react";
 import type { LeaderboardRow, TableConfig, TableSummary, Variant } from "@shared/protocol";
@@ -12,6 +12,7 @@ import { Field, Sheet, Toast } from "../components/ui";
 import { BoardsPicker, RunsPicker } from "../components/Panels";
 import { GAME_GUIDE } from "@shared/guide";
 import { DealersChoicePicker } from "../components/Guide";
+import { FeedbackSheet } from "../components/Feedback";
 import { Logo } from "./Login";
 
 export function LobbyPage() {
@@ -19,6 +20,7 @@ export function LobbyPage() {
   const [tables, setTables] = useState<TableSummary[] | null>(null);
   const [board, setBoard] = useState<LeaderboardRow[] | null>(null);
   const [create, setCreate] = useState(false);
+  const [feedback, setFeedback] = useState(false);
   const [code, setCode] = useState("");
   const [toast, setToast] = useState<string | null>(null);
 
@@ -44,7 +46,13 @@ export function LobbyPage() {
     <div className="min-h-full max-w-2xl mx-auto px-4 pb-10" style={{ paddingTop: "calc(var(--sat) + 16px)", paddingBottom: "calc(var(--sab) + 40px)" }}>
       <Toast message={toast} />
       <header className="grid grid-cols-[1fr_auto_1fr] items-center mb-7">
-        <div />
+        <div>
+          {flags.feedback && (
+            <button className="btn btn-ghost btn-sm" onClick={() => setFeedback(true)} aria-label="Send feedback or an idea">
+              <MessageSquarePlus size={18} aria-hidden="true" /> <span className="hidden sm:inline">Feedback</span>
+            </button>
+          )}
+        </div>
         <div className="flex flex-col items-center gap-2">
           <Logo size={56} />
           <h1 className="text-sm font-extrabold uppercase tracking-[0.18em] text-gradient-gold" style={{ fontFamily: "var(--font-display)" }}>{APP_NAME}</h1>
@@ -146,6 +154,7 @@ export function LobbyPage() {
       )}
 
       <CreateSheet open={create && flags.createTables} onClose={() => setCreate(false)} />
+      <FeedbackSheet open={feedback} onClose={() => setFeedback(false)} />
     </div>
   );
 }

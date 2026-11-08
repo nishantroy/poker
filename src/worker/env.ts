@@ -7,6 +7,10 @@ export interface Env {
   ASSETS: Fetcher;
   /** Comma-separated usernames allowed to change feature flags (see src/shared/flags.ts). */
   ADMIN_USERS?: string;
+  /** GitHub repo that receives in-app feedback, e.g. "nishantroy/poker". */
+  FEEDBACK_REPO?: string;
+  /** Secret: fine-grained GitHub token with Issues read/write on FEEDBACK_REPO. Without it, feedback falls back to a prefilled GitHub link. */
+  GITHUB_TOKEN?: string;
 }
 
 export function accounts(env: Env) {

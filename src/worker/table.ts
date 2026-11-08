@@ -6,7 +6,7 @@ import {
 } from "@engine/index";
 import { addHud, emptyHud, hudFromHand, type HandRecord, type HudCounters } from "@engine/hud";
 import type {
-  ChatMessage, ClientMessage, HandRecordView, HandSummary, LogLine, PublicGhost, PublicSeat, RebuyRequest, ServerMessage, SessionResultRow, TableOptions,
+  ChatMessage, ClientMessage, SeatAction, HandRecordView, HandSummary, LogLine, PublicGhost, PublicSeat, RebuyRequest, ServerMessage, SessionResultRow, TableOptions,
   TableStatus, TableView, TimerInfo,
 } from "@shared/protocol";
 import { LIMITS, TAUNTS, TAUNT_COOLDOWN_MS, defaultOptions, validateConfig } from "@shared/protocol";
@@ -67,6 +67,8 @@ interface Meta {
   orbitLeft: number;
   /** First hand only: button drawn early so that player can pick the game. */
   firstButton: number | null;
+  /** Seat → most recent action this street, for the badge over each avatar. */
+  lastActions: Record<number, SeatAction>;
 }
 
 interface Attachment {
@@ -160,6 +162,7 @@ export class TableDO extends DurableObject<Env> {
           votes: m.votes ?? {}, rabbitShown: m.rabbitShown ?? null, pendingConfig: m.pendingConfig ?? null, autoSatOut: m.autoSatOut ?? [],
           flags: normalizeFlags(m.flags), ghostVote: m.ghostVote ?? null, lastTaunt: m.lastTaunt ?? {},
           gameChoice: m.gameChoice ?? null, gameChosenFor: m.gameChosenFor ?? 0, orbitLeft: m.orbitLeft ?? 0, firstButton: m.firstButton ?? null,
+          lastActions: m.lastActions ?? {},
         } as Meta;
       }
       if (r.key === "game") {
@@ -207,7 +210,7 @@ export class TableDO extends DurableObject<Env> {
       createdAt: Date.now(), timer: null, rebuyRequests: [], departed: [], logSeq: 0, chatSeq: 0, leaving: [],
       pendingConfig: null, autoSatOut: [], options: defaultOptions(), hud: {}, cur: null, unlocked: [], votes: {}, rabbitShown: null,
       flags: args.flags ? normalizeFlags(args.flags) : defaultFlags(),
-      ghostVote: null, lastTaunt: {}, gameChoice: null, gameChosenFor: 0, orbitLeft: 0, firstButton: null,
+      ghostVote: null, lastTaunt: {}, gameChoice: null, gameChosenFor: 0, orbitLeft: 0, firstButton: null, lastActions: {},
     };
     this.game = createGame(validateConfig(args.config));
     this.log("system", `Table created by ${args.hostName}.`);
@@ -807,6 +810,12 @@ export class TableDO extends DurableObject<Env> {
       meta.rabbitShown = null;
     }
     if (meta.cur) meta.cur.events.push(...events);
+    for (const e of events) {
+      if (e.type === "handStarted" || e.type === "street") meta.lastActions = {};
+      else if (e.type === "action" && e.action !== "fold" && e.action !== "discard") {
+        meta.lastActions[e.seat] = { type: e.allIn ? "allin" : e.action, amount: e.amount };
+      }
+    }
     this.logEvents(prev, state, events);
     if (state.hand && state.hand.phase === "showdown" && (!prev.hand || prev.hand.phase !== "showdown")) {
       this.onHandEnded(events);
@@ -1112,6 +1121,7 @@ export class TableDO extends DurableObject<Env> {
         streetBet: hp?.streetBet ?? 0, totalBet: hp?.totalBet ?? 0, cards, discarded: hp?.discarded.length ?? 0,
         revealed: !!hp && hp.revealed && showAll, handName: shown?.name, bestCards: shown?.cards,
         pendingAdd: s.pendingAdd, totalBuyIn: s.totalBuyIn,
+        lastAction: hp && !hp.folded && h && h.phase !== "showdown" ? meta.lastActions[s.seat] ?? null : null,
       };
     });
 

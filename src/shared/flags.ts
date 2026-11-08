@@ -22,6 +22,7 @@ export const FLAG_DEFS = {
   badBeat: { label: "Bad beat splash", hint: "Full-screen moment when a big favourite gets rivered.", server: true },
   taunts: { label: "Taunts", hint: "Quick canned taunts shown as speech bubbles at the table.", server: true },
   runItTwice: { label: "Run it twice", hint: "All-in players can agree to run the rest of the board two or three times. Off: always once.", server: true },
+  feedback: { label: "Feedback button", hint: "Players can send bug reports and ideas, filed as GitHub issues.", server: true },
   dealersChoice: { label: "Dealer's choice", hint: "The dealer picks the game each hand or each orbit. Off: those tables keep their current game.", server: true },
 } as const;
 

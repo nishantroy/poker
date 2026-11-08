@@ -59,6 +59,14 @@ assert(A.view.seats[0].cards.every((c) => typeof c === "string") && A.view.seats
 assert(A.view.seats[3].cards.every((c) => c === null), "opponent hole cards are hidden");
 assert(B.view.seats[0].cards.every((c) => c === null), "my hole cards are hidden from the opponent");
 
+// last action badge
+{
+  const h = A.view.hand; const c = h.actor === 0 ? A : B; const seat = h.actor;
+  send(c, { t: "action", seq: h.actionSeq, action: { type: "call" } });
+  await wait(300);
+  assert(A.view.seats[seat].lastAction?.type === "call" && B.view.seats[seat].lastAction?.amount > 0, "a player's last action is shown to everyone");
+}
+
 // reconnect mid-hand
 B.ws.close();
 await wait(300);
@@ -251,6 +259,15 @@ assert(A.errors.every((e) => e.code === "disabled" || e.code === "taunt_cooldown
   assert(C.view.hand?.number === 2, "next hand deals itself when the player returns, no Start needed");
   assert(C.errors.length === 0 && D.errors.length === 0, "auto-deal section had no socket errors");
   C.ws.close(); D.ws.close();
+}
+
+// ----- feedback -----
+{
+  const fb = await fetch(`${BASE}/api/feedback`, { method: "POST", headers: { "content-type": "application/json", cookie: a.cookie }, body: JSON.stringify({ kind: "bug", title: "Smoke test report", details: "ignore", context: { page: "/smoke" } }) });
+  const fj = await fb.json();
+  assert(fb.ok && (fj.filed || /github\.com\/.+\/issues\/new\?/.test(fj.url)), "feedback returns a filed issue or a prefilled GitHub link");
+  const bad = await fetch(`${BASE}/api/feedback`, { method: "POST", headers: { "content-type": "application/json", cookie: a.cookie }, body: JSON.stringify({ kind: "idea", title: "x" }) });
+  assert(bad.status === 400, "feedback needs a title");
 }
 
 // ----- dealer's choice and running it twice -----

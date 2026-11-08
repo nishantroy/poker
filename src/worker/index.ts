@@ -126,6 +126,46 @@ async function handleApi(req: Request, env: Env, path: string): Promise<Response
       return json(snap);
     }
 
+    if (path === "/api/feedback" && method === "POST") {
+      if (!flags.feedback) return disabled();
+      const b = await readBody(req);
+      const kind = b.kind === "bug" ? "bug" : "idea";
+      const title = String(b.title ?? "").replace(/\s+/g, " ").trim().slice(0, 120);
+      const details = String(b.details ?? "").trim().slice(0, 4000);
+      if (title.length < 3) return error(400, "bad_feedback", "Add a short title");
+      const ctxInfo = (b.context && typeof b.context === "object" ? b.context : {}) as Record<string, unknown>;
+      const str = (v: unknown, n: number) => String(v ?? "").slice(0, n);
+      const body = [
+        details || "_No details given._",
+        "",
+        "---",
+        `Sent from ${"Bink City"} by **${user.username}** · ${kind === "bug" ? "bug report" : "idea"}`,
+        `Page: \`${str(ctxInfo.page, 80)}\`${ctxInfo.variant ? ` · Game: ${str(ctxInfo.variant, 20)}` : ""}${ctxInfo.hand ? ` · Hand #${str(ctxInfo.hand, 8)}` : ""}`,
+        `Device: ${str(ctxInfo.ua, 200)}`,
+      ].join("\n");
+      const repo = env.FEEDBACK_REPO || "nishantroy/poker";
+      const labels = [kind === "bug" ? "bug" : "enhancement", "from-app"];
+      const issueTitle = `${kind === "bug" ? "[Bug]" : "[Idea]"} ${title}`;
+      if (!env.GITHUB_TOKEN) {
+        const url = `https://github.com/${repo}/issues/new?${new URLSearchParams({ title: issueTitle, body, labels: labels.join(",") })}`;
+        slog("info", "feedback.fallback", { user: user.username, kind });
+        return json({ ok: true, filed: false, url });
+      }
+      if (!(await acc.feedbackAllowed(user.id))) return error(429, "too_many", "That's a lot of feedback. Try again in an hour.");
+      const gh = await fetch(`https://api.github.com/repos/${repo}/issues`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${env.GITHUB_TOKEN}`, accept: "application/vnd.github+json", "user-agent": "bink-city-feedback", "x-github-api-version": "2022-11-28", "content-type": "application/json" },
+        body: JSON.stringify({ title: issueTitle, body, labels }),
+      });
+      if (!gh.ok) {
+        slog("error", "feedback.githubFailed", { user: user.username, status: gh.status, body: (await gh.text()).slice(0, 300) });
+        return error(502, "github_failed", "Could not file that on GitHub right now. Try again later.");
+      }
+      const issue = (await gh.json()) as { html_url: string; number: number };
+      slog("info", "feedback.filed", { user: user.username, kind, issue: issue.number });
+      return json({ ok: true, filed: true, url: issue.html_url, number: issue.number });
+    }
+
     if (path === "/api/tables" && method === "POST") {
       if (!flags.createTables) return disabled();
       const b = await readBody(req);

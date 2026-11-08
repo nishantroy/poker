@@ -1,5 +1,5 @@
 import { WifiOff } from "lucide-react";
-import type { PublicSeat, TimerInfo } from "@shared/protocol";
+import type { PublicSeat, SeatAction, TimerInfo } from "@shared/protocol";
 import { fmtChips, initials } from "../lib/format";
 import { PlayingCard } from "./Card";
 
@@ -71,6 +71,7 @@ export function SeatView({ seat, isMe, acting, timer, offset, isButton, isWinner
             </span>
           )}
         </button>
+        {seat.lastAction && <ActionBadge action={seat.lastAction} />}
         {isButton && (
           <span className="absolute -left-3 bottom-0 w-6 h-6 rounded-full bg-white text-black text-[11px] font-black flex items-center justify-center shadow-pop" aria-label="Dealer button">D</span>
         )}
@@ -91,6 +92,24 @@ export function SeatView({ seat, isMe, acting, timer, offset, isButton, isWinner
       {!seat.inHand && seat.status === "sittingOut" && <span className="mt-1 pill">sitting out</span>}
       {seat.inHand && seat.folded && !showdown && <span className="mt-1 pill">folded</span>}
     </div>
+  );
+}
+
+function actionLabel(a: SeatAction) {
+  switch (a.type) {
+    case "check": return "Check";
+    case "call": return `Call ${fmtChips(a.amount)}`;
+    case "bet": return `Bet ${fmtChips(a.amount)}`;
+    case "raise": return `Raise ${fmtChips(a.amount)}`;
+    case "allin": return "All-in";
+  }
+}
+
+/** Most recent action this street, pinned to the top of the avatar. */
+function ActionBadge({ action }: { action: SeatAction }) {
+  const label = actionLabel(action);
+  return (
+    <span className="action-badge-wrap"><span key={label} className={`action-badge action-${action.type} anim-pop`}>{label}</span></span>
   );
 }
 

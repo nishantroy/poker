@@ -6,6 +6,7 @@ import { TAUNTS } from "@shared/protocol";
 import { HandsList, ReplayView } from "./Replay";
 import { GAME_GUIDE } from "@shared/guide";
 import { DealersChoicePicker } from "./Guide";
+import { FeedbackSheet } from "./Feedback";
 import { VARIANTS } from "@engine/variants";
 import { fmtChips, fmtNet } from "../lib/format";
 import { navigate } from "../lib/router";
@@ -45,7 +46,10 @@ export function PlayerMenu({ open, onClose, view, send }: { open: boolean; onClo
   const [rebuy, setRebuy] = useState(view.config.startingStack);
   const pending = view.rebuyRequests.find((r) => r.playerId === view.me.userId);
   const act = (m: ClientMessage) => { send(m); onClose(); };
+  const [feedback, setFeedback] = useState(false);
   return (
+    <>
+    <FeedbackSheet open={feedback} onClose={() => setFeedback(false)} context={{ variant: view.hand?.variant ?? view.config.variant, hand: view.hand?.number }} />
     <Sheet open={open} onClose={onClose} title="You">
       <div className="space-y-3">
         {me ? (
@@ -78,9 +82,11 @@ export function PlayerMenu({ open, onClose, view, send }: { open: boolean; onClo
         ) : (
           <p className="text-muted text-sm">Tap an empty seat to join the game.</p>
         )}
+        {view.flags.feedback && <button className="btn btn-ghost w-full" onClick={() => { onClose(); setFeedback(true); }}>Send feedback or an idea</button>}
         <button className="btn btn-ghost w-full" onClick={() => navigate("/")}>Back to lobby</button>
       </div>
     </Sheet>
+    </>
   );
 }
 

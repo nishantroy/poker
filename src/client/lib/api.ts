@@ -25,6 +25,8 @@ export const api = {
   login: (username: string, pin: string) => call<{ user: UserInfo }>("/api/login", { method: "POST", body: JSON.stringify({ username, pin }) }),
   signup: (username: string, pin: string) => call<{ user: UserInfo }>("/api/signup", { method: "POST", body: JSON.stringify({ username, pin }) }),
   logout: () => call<{ ok: true }>("/api/logout", { method: "POST" }),
+  feedback: (body: { kind: "bug" | "idea"; title: string; details: string; context: Record<string, string | number | undefined> }) =>
+    call<{ ok: true; filed: boolean; url: string; number?: number }>("/api/feedback", { method: "POST", body: JSON.stringify(body) }),
   createTable: (name: string, config: Partial<TableConfig>) => call<{ code: string }>("/api/tables", { method: "POST", body: JSON.stringify({ name, config }) }),
   myTables: () => call<{ tables: TableSummary[] }>("/api/tables"),
   table: (code: string) => call<{ table: { code: string; name: string; status: string; hostName: string; config: TableConfig; players: number } }>(`/api/tables/${encodeURIComponent(code)}`),

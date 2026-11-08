@@ -79,6 +79,11 @@ CREATE TABLE IF NOT EXISTS flags (
   updated_at INTEGER NOT NULL,
   updated_by TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS feedback (
+  id INTEGER PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  ts INTEGER NOT NULL
+);
 `;
 
 export class AuthError extends Error {
@@ -177,6 +182,16 @@ export class AccountsDO extends DurableObject<Env> {
       if ((FLAG_NAMES as string[]).includes(r.name)) out[r.name as FlagName] = r.enabled === 1;
     }
     return out;
+  }
+
+  /** Feedback rate limit: at most 5 per user per hour. Records the attempt when allowed. */
+  feedbackAllowed(userId: string): boolean {
+    const since = Date.now() - 60 * 60 * 1000;
+    const n = this.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM feedback WHERE user_id = ? AND ts > ?", userId, since).toArray()[0]?.n ?? 0;
+    if (n >= 5) return false;
+    this.sql.exec("INSERT INTO feedback (user_id, ts) VALUES (?, ?)", userId, Date.now());
+    this.sql.exec("DELETE FROM feedback WHERE ts < ?", Date.now() - 7 * 24 * 60 * 60 * 1000);
+    return true;
   }
 
   /** Tables that may still be in play (not ended, touched in the last 3 days). */

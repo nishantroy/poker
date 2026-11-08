@@ -33,7 +33,9 @@
   ],
   "vars": {
     // Comma-separated usernames that may flip feature flags. The first account ever created is always an admin.
-    "ADMIN_USERS": ""
+    "ADMIN_USERS": "",
+    // In-app feedback becomes GitHub issues here. Needs the GITHUB_TOKEN secret (wrangler secret put GITHUB_TOKEN).
+    "FEEDBACK_REPO": "nishantroy/poker"
   },
   "observability": { "enabled": true }
 }
