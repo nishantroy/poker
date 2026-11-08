@@ -86,7 +86,7 @@ function FlagsPanel() {
   return (
     <section className="mb-8">
       <h2 className="label flex items-center gap-1.5"><ShieldCheck size={14} aria-hidden="true" /> Feature flags {off > 0 && <span className="pill pill-red normal-case tracking-normal">{off} off</span>}</h2>
-      <p className="text-xs text-muted mb-2">Only admins see this. Switch a feature off if it misbehaves; every open table picks the change up immediately, no redeploy needed.</p>
+      <p className="text-xs text-muted mb-2">Admins only. Turn off anything that misbehaves and open tables update instantly.</p>
       <div className={`space-y-2 ${busy ? "opacity-70 pointer-events-none" : ""}`}>
         {FLAG_NAMES.map((n) => (
           <Toggle key={n} label={FLAG_DEFS[n].label} hint={FLAG_DEFS[n].hint} checked={flags[n]} onChange={(v) => void flip(n, v)} />

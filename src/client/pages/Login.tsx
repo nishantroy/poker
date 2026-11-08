@@ -22,7 +22,7 @@ export function LoginPage() {
       const r = mode === "login" || !flags.signup ? await api.login(username.trim(), pin) : await api.signup(username.trim(), pin);
       setUser(r.user);
     } catch (e) {
-      setErr(e instanceof ApiError ? e.message : "Could not reach the server");
+      setErr(e instanceof ApiError ? e.message : "Can't reach the table. Check your connection.");
     } finally {
       setBusy(false);
     }
@@ -35,15 +35,15 @@ export function LoginPage() {
         <div className="flex flex-col items-center text-center mb-8 anim-fade-up">
           <div className="logo-glow mb-5"><Logo size={112} /></div>
           <h1 className="text-[40px] leading-none font-extrabold uppercase tracking-[0.08em] text-gradient-gold" style={{ fontFamily: "var(--font-display)" }}>{APP_NAME}</h1>
-          <p className="text-muted mt-3 text-[15px]">{signup ? "Pick a username and a short PIN." : TAGLINE}</p>
+          <p className="text-muted mt-3 text-[15px]">{signup ? "Pick a name and a PIN to grab a seat." : TAGLINE}</p>
         </div>
 
         <form onSubmit={submit} className="space-y-4 anim-fade-up">
           <Field label="Username">
             <input className="input" autoComplete="username" autoCapitalize="none" spellCheck={false} value={username} autoFocus
-              onChange={(e) => setUsername(e.target.value)} placeholder="nish" required minLength={2} maxLength={20} />
+              onChange={(e) => setUsername(e.target.value)} required minLength={2} maxLength={20} />
           </Field>
-          <Field label="PIN" hint={signup ? "4 to 6 digits. Casual login, not bank security." : undefined}>
+          <Field label="PIN" hint={signup ? "4 to 6 digits." : undefined}>
             <div className="relative">
               <input className="input pr-12 tracking-[0.35em]" type={showPin ? "text" : "password"} inputMode="numeric" pattern="[0-9]*" autoComplete={signup ? "new-password" : "current-password"}
                 value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="••••" required minLength={4} maxLength={6} />
@@ -61,19 +61,15 @@ export function LoginPage() {
 
         {flags.signup ? (
           <p className="text-sm text-muted mt-6 text-center anim-fade-up">
-            {signup ? "Already have a seat? " : "New here? "}
+            {signup ? "Been here before? " : "New in town? "}
             <button type="button" className="text-cyan-bright font-medium underline underline-offset-4 decoration-cyan/40 hover:decoration-cyan" onClick={() => { setMode(signup ? "login" : "signup"); setErr(null); }}>
-              {signup ? "Log in" : "Create an account"}
+              {signup ? "Log in" : "Make an account"}
             </button>
           </p>
         ) : (
-          <p className="text-sm text-dim mt-6 text-center">Signups are closed right now.</p>
+          <p className="text-sm text-dim mt-6 text-center">New signups are closed for now.</p>
         )}
       </main>
-
-      <footer className="relative text-xs text-dim flex items-center gap-3 anim-fade-up">
-        <span>Hold'em · Omaha · Pineapple</span><span aria-hidden="true">·</span><span>Up to 8 players</span>
-      </footer>
     </div>
   );
 }

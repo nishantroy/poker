@@ -2,4 +2,4 @@
 export const APP_NAME = "Bink City";
 /** Short mark for tight spaces (table header). */
 export const APP_MARK = "BC";
-export const TAGLINE = "Home game, any device.";
+export const TAGLINE = "The home game never closes.";

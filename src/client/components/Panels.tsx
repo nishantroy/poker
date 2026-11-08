@@ -55,7 +55,7 @@ export function PlayerMenu({ open, onClose, view, send }: { open: boolean; onClo
               </div>
             </div>
             {me.status === "sittingOut" ? (
-              <button className="btn btn-green w-full" onClick={() => act({ t: "sitIn" })}>I'm back — deal me in</button>
+              <button className="btn btn-green w-full" onClick={() => act({ t: "sitIn" })}>Deal me back in</button>
             ) : (
               <button className="btn w-full" onClick={() => act({ t: "sitOut" })}>Sit out next hand</button>
             )}
@@ -94,12 +94,12 @@ function GhostVote({ view, send }: { view: TableView; send: (m: ClientMessage) =
         <span className="anim-ghost text-violet mt-0.5" aria-hidden="true"><Ghost size={22} /></span>
         <div className="flex-1">
           <p className="font-semibold text-sm">Ghost player {g.enabled ? <span className="pill pill-green ml-1">in play</span> : <span className="pill ml-1">off</span>}</p>
-          <p className="text-xs text-muted">A ghost is dealt in every hand but never bets. It always sees showdown and can only win there. When it wins, its whole stack rides as dead money in the next main pot.</p>
+          <p className="text-xs text-muted">The ghost is dealt every hand, never bets, and can only win at showdown. When it wins, its stack rides as dead money in the next main pot.</p>
           {g.enabled && <p className="text-xs mt-1">Ghost stack: <span className="num font-bold text-gold-bright">{g.stack.toLocaleString()}</span></p>}
         </div>
       </div>
       {blocked ? (
-        <p className="text-xs text-dim">The ghost can only be sent away once someone takes its chips at showdown.</p>
+        <p className="text-xs text-dim">You can vote the ghost out once someone busts it.</p>
       ) : (
         <button className={`btn w-full ${want ? "btn-primary" : ""}`} disabled={!!vote?.voted} onClick={() => send({ t: "ghostVote", on: want })}>
           {vote?.voted ? `Voted · ${vote.votes}/${vote.needed}` : want ? `Vote to summon the ghost${vote ? ` (${vote.votes}/${vote.needed})` : ""}` : `Vote to banish the ghost${vote ? ` (${vote.votes}/${vote.needed})` : ""}`}
@@ -279,7 +279,7 @@ export function TauntSheet({ open, onClose, onPick }: { open: boolean; onClose: 
           </button>
         ))}
       </div>
-      <p className="text-xs text-dim mt-3">Everyone at the table sees it for a few seconds. One every few seconds, be nice-ish.</p>
+      <p className="text-xs text-dim mt-3">Pops up over your seat for a few seconds. Be nice-ish.</p>
     </Sheet>
   );
 }

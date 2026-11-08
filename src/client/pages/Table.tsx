@@ -316,7 +316,7 @@ export function TablePage({ code }: { code: string }) {
               <div className="text-center">
                 <p className="font-extrabold text-lg" style={{ fontFamily: "var(--font-display)" }}>{view.status === "ended" ? "Session over" : "Waiting to start"}</p>
                 <p className="text-sm text-muted">
-                  {view.seats.filter(Boolean).length < 2 ? "Need at least 2 players" : view.me.isHost ? "Tap Start when everyone is seated" : "The host will start the game"}
+                  {view.seats.filter(Boolean).length < 2 ? "Need at least 2 players" : view.me.isHost ? "Tap Start once everyone's seated" : "The host will start the game"}
                 </p>
                 <button className="mt-2 pill normal-case tracking-normal text-xs px-3 py-1 whitespace-nowrap" onClick={copyLink}>
                   Code <span className="font-black tracking-[0.15em] text-text">{code}</span>
@@ -474,7 +474,7 @@ function StatusBar({ view, onSit, onStart, onRabbit }: { view: TableView; onSit:
   let action: { label: string; onClick: () => void; cls: string } | null = null;
   if (view.status === "ended") text = "This session has ended.";
   else if (!mySeat) {
-    text = players >= view.config.maxSeats ? "Table is full — you're spectating." : "Tap an empty seat to join.";
+    text = players >= view.config.maxSeats ? "Table's full. You're watching." : "Tap an empty seat to join.";
     if (players < view.config.maxSeats) action = { label: "Take a seat", onClick: onSit, cls: "btn-primary" };
   } else if (mySeat.status === "sittingOut") text = "You're sitting out. Open your menu to come back.";
   else if (mySeat.stack === 0 && !mySeat.inHand) text = "You're out of chips. Rebuy from your menu.";

@@ -61,7 +61,7 @@ export function LobbyPage() {
             <Plus size={20} aria-hidden="true" /> Create a table
           </button>
         ) : (
-          <p className="card-surface p-4 text-sm text-muted min-h-[64px] flex items-center">Creating tables is paused right now. You can still join one with a code.</p>
+          <p className="card-surface p-4 text-sm text-muted min-h-[64px] flex items-center">New tables are paused. You can still join with a code.</p>
         )}
         <form onSubmit={join} className="flex gap-2">
           <input className="input uppercase tracking-[0.2em] font-bold" placeholder="JOIN CODE" value={code} aria-label="Table code"
@@ -78,8 +78,8 @@ export function LobbyPage() {
           <div className="card-surface p-5 flex items-center gap-4">
             <span className="w-11 h-11 rounded-full bg-surface-2 border border-border flex items-center justify-center text-muted shrink-0"><LayoutGrid size={20} aria-hidden="true" /></span>
             <div>
-              <p className="font-semibold text-sm">No open tables yet</p>
-              <p className="text-muted text-sm">Create one, then share the link or the 6-letter code. Tables disappear from here 3 days after the session ends.</p>
+              <p className="font-semibold text-sm">No tables yet</p>
+              <p className="text-muted text-sm">Open one and send friends the link or the 6-letter code. Finished tables drop off after 3 days.</p>
             </div>
           </div>
         ) : (
@@ -111,7 +111,7 @@ export function LobbyPage() {
             <span className="w-11 h-11 rounded-full bg-surface-2 border border-border flex items-center justify-center text-muted shrink-0"><Trophy size={20} aria-hidden="true" /></span>
             <div>
               <p className="font-semibold text-sm">Nobody on the board yet</p>
-              <p className="text-muted text-sm">When the host ends a session, everyone's net result lands here.</p>
+              <p className="text-muted text-sm">Results land here when a host ends a session.</p>
             </div>
           </div>
         ) : (
@@ -207,7 +207,7 @@ function CreateSheet({ open, onClose }: { open: boolean; onClose: () => void }) 
         </div>
         {flags.squid && <BoardsPicker boards={cfg.boards} squid={cfg.squid} onChange={(b, sq) => setCfg((c) => ({ ...c, boards: b, squid: sq }))} />}
         {err && <p className="text-sm text-[#ff8b8e]" role="alert">{err}</p>}
-        <button className="btn btn-primary w-full" disabled={busy}>{busy ? "Creating…" : "Create & open table"}</button>
+        <button className="btn btn-primary w-full" disabled={busy}>{busy ? "Creating…" : "Open table"}</button>
       </form>
     </Sheet>
   );
