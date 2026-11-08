@@ -426,6 +426,19 @@ assert(A.errors.every((e) => e.code === "disabled" || e.code === "taunt_cooldown
   send(P, { t: "end" }); for (let i = 0; i < 30 && !P.ended; i++) await wait(300);
   assert(P.ended && P.ended.reduce((x, r) => x + r.net, 0) === 0, "PLO hi-lo session nets sum to zero");
   P.ws.close(); Q.ws.close();
+  // Irish hi-lo: 5 cards, played to showdown
+  const irCode = await mk("Smoke Irish", { variant: "irish" });
+  const I = await connect(a, irCode), J = await connect(b, irCode);
+  send(I, { t: "sit", seat: 0, buyIn: 200 }); send(J, { t: "sit", seat: 1, buyIn: 200 });
+  await wait(300); send(I, { t: "start" }); await wait(500);
+  assert(I.view.hand.variant === "irish" && I.view.seats[0].cards.length === 5 && J.view.seats[0].cards.every((c) => c === null), "Irish hi-lo deals 5 private cards");
+  for (let i = 0; i < 40 && I.view.hand.phase !== "showdown"; i++) {
+    const h = I.view.hand;
+    if (h.phase === "betting" && h.actor !== null) { const c = h.actor === 0 ? I : J; send(c, { t: "action", seq: h.actionSeq, action: { type: c.view.me.limits?.canRaise ? "allin" : "call" } }); }
+    await wait(350);
+  }
+  assert(I.view.hand.phase === "showdown" && I.view.seats.filter(Boolean).reduce((x, s) => x + s.stack, 0) === 400, "Irish hi-lo pays out every chip at showdown");
+  I.ws.close(); J.ws.close();
 }
 
 // ----- dealer's choice and running it twice -----

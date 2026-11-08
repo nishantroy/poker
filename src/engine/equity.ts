@@ -63,7 +63,7 @@ export function computeEquity(
     let loWinners: number[] = [];
     if (spec.hiLo) {
       let bestLow = -1;
-      const lows = holes.map((h) => evaluateOmahaLow(h, full)?.score ?? -1);
+      const lows = holes.map((h) => evaluateOmahaLow(h, full, spec.holeRule)?.score ?? -1);
       for (const l of lows) if (l > bestLow) bestLow = l;
       if (bestLow >= 0) loWinners = lows.flatMap((l, i) => (l === bestLow ? [i] : []));
     }

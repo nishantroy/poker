@@ -64,6 +64,20 @@ export const GAME_GUIDE: Record<Variant, GameGuide> = {
       "Getting quartered (splitting the low with someone else) can lose you money even when you win.",
     ],
   },
+  irish: {
+    tagline: "Five cards, hi-lo split. Use 2 or 3 of yours for each half.",
+    rules: [
+      "Everyone gets 5 cards. Pot-limit betting, with a flop, turn and river like Omaha.",
+      "Each hand is 5 cards: either 2 of yours with 3 from the board, or 3 of yours with 2 from the board. High and low pick whichever works best, separately.",
+      "Half the pot goes to the best high and half to the best low. A low is 5 different ranks, all 8 or lower, with the ace counting low. No low means the high takes it all.",
+      "Because you can use 3 of your own cards, a hand like A-2-3 needs only two low cards on the board to make a low.",
+    ],
+    watchOut: [
+      "Holding A-2-3 (or A-2-4) is the dream start: it makes lows on boards where Omaha players can't.",
+      "You can scoop by winning high with one set of cards and low with another.",
+      "Lows get quartered often, since plenty of players hold an ace and a deuce.",
+    ],
+  },
   pineapple: {
     tagline: "Three cards, throw one away before the flop.",
     rules: [

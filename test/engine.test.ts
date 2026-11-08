@@ -780,3 +780,21 @@ describe("short deck", () => {
     expect(s.hand!.deck.length + 8).toBe(52);
   });
 });
+
+describe("Irish hi-lo", () => {
+  it("deals 5 cards and splits high and low using 2 or 3 hole cards", () => {
+    // heads-up: seat 0 (button/sb) A-2-3 for low, seat 1 kings for high. Board has only two low cards (6, 7).
+    let s = startRigged(table([1000, 1000], { variant: "irish" }), 0, "As Kh 2d Kd 3c Ks Qs Jc Qd Js  7h 6s Td 9c 4h").state;
+    expect(s.hand!.players.every((p) => p.hole.length === 5)).toBe(true);
+    for (let i = 0; i < 30 && s.hand!.phase === "betting"; i++) {
+      const seat = s.hand!.actor!;
+      s = act(s, seat, getLimits(s, seat).canRaise ? "allin" : "call").state;
+    }
+    while (s.hand!.phase !== "showdown") s = advance(s).state;
+    const w = s.hand!.result!.pots[0]!.winners;
+    // seat 1: trip kings (3 hole cards: Kh Kd Ks) beats seat 0 for high; seat 0: 6-4-3-2-A low (As 2d 3c + 6s 4h)
+    expect(w).toContainEqual(expect.objectContaining({ seat: 1, half: "high", amount: 1000 }));
+    expect(w).toContainEqual(expect.objectContaining({ seat: 0, half: "low", amount: 1000, handName: "6-4-3-2-A low" }));
+    expect(stacks(s)).toEqual([1000, 1000]);
+  });
+});

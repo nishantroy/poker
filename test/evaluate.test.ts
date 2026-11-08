@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { evaluate5, evaluateAny, evaluateOmaha, evaluateOmahaLow, evaluateLow5, describeHand, describeLow, CATEGORY_NAMES } from "@engine/evaluate";
+import { evaluate5, evaluateAny, evaluateOmaha, evaluateOmahaLow, evaluateTwoOrThree, evaluateLow5, describeHand, describeLow, CATEGORY_NAMES } from "@engine/evaluate";
 import type { Card } from "@engine/cards";
 
 const c = (s: string) => s.split(" ") as Card[];
@@ -136,5 +136,27 @@ describe("eight-or-better low", () => {
     expect(evaluateOmahaLow(c("As Ks Kd Qh"), c("3c 4d 7h 6s 8s"))).toBeNull();
     // fewer than three low cards on board: no low
     expect(evaluateOmahaLow(c("As 2s 3d 4h"), c("3c Td 7h Qs Js"))).toBeNull();
+  });
+});
+
+describe("Irish rule: 2 or 3 hole cards", () => {
+  it("high can use three hole cards", () => {
+    // trips in hand + a pair on board: full house only by using 3 hole cards
+    const r = evaluateTwoOrThree(c("7s 7d 7c Kd 2h"), c("9s 9d Jc Qh 3s"));
+    expect(describeHand(r)).toBe("Full House, Sevens full of Nines");
+    expect(evaluateOmaha(c("7s 7d 7c Kd 2h"), c("9s 9d Jc Qh 3s")).category).toBeLessThan(r.category);
+  });
+  it("high can still use two hole cards", () => {
+    const r = evaluateTwoOrThree(c("Ah Kh 2c 3d 9s"), c("Qh Jh Th 4s 5c"));
+    expect(describeHand(r)).toBe("Royal Flush");
+  });
+  it("A-2-3 makes a low with only two low cards on the board", () => {
+    const hole = c("As 2d 3c Kh Qs");
+    const board = c("7h 6s Td Jc 9c");
+    expect(evaluateOmahaLow(hole, board)).toBeNull(); // Omaha: needs three low board cards
+    expect(evaluateOmahaLow(hole, board, "twoOrThree")!.ranks).toEqual([7, 6, 3, 2, 1]);
+  });
+  it("a low still needs two low cards on the board", () => {
+    expect(evaluateOmahaLow(c("As 2d 3c 4h 5s"), c("7h Ks Td Jc 9c"), "twoOrThree")).toBeNull();
   });
 });

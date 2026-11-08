@@ -136,7 +136,32 @@ export function evaluateOmaha(hole: Card[], board: Card[], rules: RankRules = {}
   return best!;
 }
 
-export function evaluateHand(rule: "any" | "exactly2", hole: Card[], board: Card[], rules: RankRules = {}): HandRank {
+/** How hole and board cards combine: Hold'em (any), Omaha (exactly 2 + 3), or Irish (2 + 3 or 3 + 2). */
+export type HoleRule = "any" | "exactly2" | "twoOrThree";
+
+/** Every way to take `k` hole cards and 5 - k board cards, for each allowed k. */
+function splits(rule: HoleRule): number[] {
+  return rule === "twoOrThree" ? [2, 3] : [2];
+}
+
+/** Irish rule: the best of exactly 2 hole + 3 board, or exactly 3 hole + 2 board. */
+export function evaluateTwoOrThree(hole: Card[], board: Card[], rules: RankRules = {}): HandRank {
+  let best: HandRank | null = null;
+  for (const k of splits("twoOrThree")) {
+    if (hole.length < k || board.length < 5 - k) continue;
+    for (const h of combinations(hole, k)) {
+      for (const b of combinations(board, 5 - k)) {
+        const r = evaluate5([...h, ...b], rules);
+        if (!best || r.score > best.score) best = r;
+      }
+    }
+  }
+  if (!best) throw new Error("not enough cards");
+  return best;
+}
+
+export function evaluateHand(rule: HoleRule, hole: Card[], board: Card[], rules: RankRules = {}): HandRank {
+  if (rule === "twoOrThree") return evaluateTwoOrThree(hole, board, rules);
   return rule === "exactly2" ? evaluateOmaha(hole, board, rules) : evaluateAny([...hole, ...board], rules);
 }
 
@@ -162,14 +187,19 @@ export function evaluateLow5(cards: Card[]): LowRank | null {
   return { score: 0xfffff - packed, ranks, cards: [...cards] };
 }
 
-/** Best Omaha low: exactly 2 hole cards + exactly 3 board cards, or null when no low qualifies. */
-export function evaluateOmahaLow(hole: Card[], board: Card[]): LowRank | null {
-  if (board.length < 3) return null;
+/**
+ * Best eight-or-better low under the game's hole rule: Omaha (exactly 2 hole + 3 board) by default,
+ * or Irish (2 + 3 or 3 + 2). Null when no low qualifies.
+ */
+export function evaluateOmahaLow(hole: Card[], board: Card[], rule: HoleRule = "exactly2"): LowRank | null {
   let best: LowRank | null = null;
-  for (const h of combinations(hole, 2)) {
-    for (const b of combinations(board, 3)) {
-      const r = evaluateLow5([...h, ...b]);
-      if (r && (!best || r.score > best.score)) best = r;
+  for (const k of splits(rule === "twoOrThree" ? "twoOrThree" : "exactly2")) {
+    if (hole.length < k || board.length < 5 - k) continue;
+    for (const h of combinations(hole, k)) {
+      for (const b of combinations(board, 5 - k)) {
+        const r = evaluateLow5([...h, ...b]);
+        if (r && (!best || r.score > best.score)) best = r;
+      }
     }
   }
   return best;

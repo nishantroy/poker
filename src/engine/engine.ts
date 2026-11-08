@@ -766,7 +766,7 @@ function showdown(s: GameState, hand: Hand, events: GameEvent[]) {
     const r = evaluateHand(spec.holeRule, hole, board, rules);
     const bh: BoardHand = { name: describeHand(r), score: r.score, cards: r.cards };
     if (spec.hiLo) {
-      const lo = evaluateOmahaLow(hole, board);
+      const lo = evaluateOmahaLow(hole, board, spec.holeRule);
       bh.low = lo ? { name: describeLow(lo), score: lo.score, cards: lo.cards } : null;
     }
     return bh;

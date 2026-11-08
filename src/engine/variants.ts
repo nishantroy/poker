@@ -1,4 +1,4 @@
-export type Variant = "nlhe" | "plo" | "plo5" | "plo6" | "plo8" | "pineapple" | "crazy-pineapple";
+export type Variant = "nlhe" | "plo" | "plo5" | "plo6" | "plo8" | "irish" | "pineapple" | "crazy-pineapple";
 
 export type BettingLimit = "no-limit" | "pot-limit";
 
@@ -8,8 +8,8 @@ export interface VariantSpec {
   short: string;
   holeCards: number;
   limit: BettingLimit;
-  /** "any": use any combination of hole + board (hold'em). "exactly2": Omaha rule. */
-  holeRule: "any" | "exactly2";
+  /** "any": use any combination of hole + board (hold'em). "exactly2": Omaha rule. "twoOrThree": 2 hole + 3 board or 3 hole + 2 board (Irish). */
+  holeRule: "any" | "exactly2" | "twoOrThree";
   /** Street after which each player must discard down to `discardTo` cards. */
   discardAfter?: "preflop" | "flop";
   discardTo?: number;
@@ -23,6 +23,7 @@ export const VARIANTS: Record<Variant, VariantSpec> = {
   plo5: { id: "plo5", name: "5-Card Pot-Limit Omaha", short: "PLO5", holeCards: 5, limit: "pot-limit", holeRule: "exactly2" },
   plo6: { id: "plo6", name: "6-Card Pot-Limit Omaha", short: "PLO6", holeCards: 6, limit: "pot-limit", holeRule: "exactly2" },
   plo8: { id: "plo8", name: "PLO Hi-Lo (8 or better)", short: "PLO8", holeCards: 4, limit: "pot-limit", holeRule: "exactly2", hiLo: true },
+  irish: { id: "irish", name: "Irish Hi-Lo", short: "IRISH", holeCards: 5, limit: "pot-limit", holeRule: "twoOrThree", hiLo: true },
   pineapple: {
     id: "pineapple",
     name: "Pineapple",
