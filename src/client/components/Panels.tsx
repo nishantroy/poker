@@ -170,7 +170,7 @@ export function HostPanel({ open, onClose, view, send }: { open: boolean; onClos
           ) : (
             <button className="btn btn-green" onClick={() => send({ t: view.status === "paused" ? "resume" : "start" })}>{view.status === "paused" ? "Resume" : "Start game"}</button>
           )}
-          <button className="btn btn-danger" onClick={() => { if (confirm("End the session for everyone and record results?")) send({ t: "end" }); }}>End session</button>
+          <button className="btn btn-danger" disabled={view.endPending} onClick={() => { if (confirm("End the session for everyone and record results? A hand in progress is played out first.")) send({ t: "end" }); }}>{view.endPending ? "Ending after this hand" : "End session"}</button>
         </div>
 
         {view.rebuyRequests.length > 0 && (

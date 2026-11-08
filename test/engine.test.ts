@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { advance, applyAction, canStartHand, chooseRuns, computePots, forfeit, getLimits, startHand, timeout, EngineError, setGhost, squidLoser, GHOST_SEAT } from "@engine/index";
 import { table, startRigged, act, stacks, awards, fixedRng } from "./helpers";
+import { createGame, seatPlayer } from "@engine/index";
+import { baseConfig } from "./helpers";
 
 describe("hand setup", () => {
   it("posts blinds, deals, and puts UTG on the clock (3+ players)", () => {
@@ -656,5 +658,15 @@ describe("run it twice", () => {
       }
       expect(ran).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("seating", () => {
+  it("rejects seat numbers that are not whole, in-range integers", () => {
+    const g = createGame(baseConfig);
+    for (const bad of [0.5, -1, 8, Number.NaN, Infinity]) {
+      expect(() => seatPlayer(g, bad, "u", "U", 100)).toThrow(/No such seat/);
+    }
+    expect(seatPlayer(g, 3, "u", "U", 100).seats[3]?.playerId).toBe("u");
   });
 });

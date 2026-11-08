@@ -69,6 +69,10 @@ interface Meta {
   firstButton: number | null;
   /** Seat → most recent action this street, for the badge over each avatar. */
   lastActions: Record<number, SeatAction>;
+  /** Host asked to end the session during a hand: end it at showdown. */
+  endPending: boolean;
+  /** Hand numbers whose rabbit hunt was revealed (replays show the rabbit only for these, or when unlocked). */
+  rabbitShownHands: number[];
 }
 
 interface Attachment {
@@ -109,6 +113,24 @@ export class TableDO extends DurableObject<Env> {
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
   }
 
+  /** In-memory per-user token bucket (resets if the object hibernates, which only happens when it's idle anyway). */
+  private buckets = new Map<string, { tokens: number; at: number }>();
+
+  /** Up to 20 messages in a burst, refilling at 4 per second. */
+  private allowMessage(userId: string): boolean {
+    const now = Date.now();
+    const b = this.buckets.get(userId) ?? { tokens: 20, at: now };
+    b.tokens = Math.min(20, b.tokens + ((now - b.at) / 1000) * 4);
+    b.at = now;
+    if (b.tokens < 1) {
+      this.buckets.set(userId, b);
+      return false;
+    }
+    b.tokens -= 1;
+    this.buckets.set(userId, b);
+    return true;
+  }
+
   // ---------- structured logs (see slog.ts) ----------
 
   /** One structured log line with table context. */
@@ -135,11 +157,19 @@ export class TableDO extends DurableObject<Env> {
   async debugSnapshot(): Promise<unknown> {
     if (!this.meta || !this.game) return null;
     const g = structuredClone(this.game);
-    if (g.hand && g.hand.phase !== "showdown") {
+    if (g.hand) {
+      // Only cards the table has seen: revealed, unfolded hands at showdown (and the ghost once shown). Never the deck or discards.
+      const over = g.hand.phase === "showdown";
       g.hand.deck = [];
-      for (const p of g.hand.players) p.hole = p.hole.map(() => "??" as never);
-      if (g.hand.ghost) g.hand.ghost.hole = g.hand.ghost.hole.map(() => "??" as never);
-    } else if (g.hand) g.hand.deck = [];
+      for (const p of g.hand.players) {
+        if (!(over && p.revealed && !p.folded)) p.hole = p.hole.map(() => "??" as never);
+        p.discarded = p.discarded.map(() => "??" as never);
+      }
+      if (g.hand.ghost) {
+        if (!(over && g.hand.ghost.revealed)) g.hand.ghost.hole = g.hand.ghost.hole.map(() => "??" as never);
+        g.hand.ghost.discarded = g.hand.ghost.discarded.map(() => "??" as never);
+      }
+    }
     const { hud: _hud, ...meta } = this.meta;
     let alarmAt: number | null = null;
     try { alarmAt = await this.ctx.storage.getAlarm(); } catch { /* ignore */ }
@@ -162,7 +192,7 @@ export class TableDO extends DurableObject<Env> {
           votes: m.votes ?? {}, rabbitShown: m.rabbitShown ?? null, pendingConfig: m.pendingConfig ?? null, autoSatOut: m.autoSatOut ?? [],
           flags: normalizeFlags(m.flags), ghostVote: m.ghostVote ?? null, lastTaunt: m.lastTaunt ?? {},
           gameChoice: m.gameChoice ?? null, gameChosenFor: m.gameChosenFor ?? 0, orbitLeft: m.orbitLeft ?? 0, firstButton: m.firstButton ?? null,
-          lastActions: m.lastActions ?? {},
+          lastActions: m.lastActions ?? {}, endPending: m.endPending ?? false, rabbitShownHands: m.rabbitShownHands ?? [],
         } as Meta;
       }
       if (r.key === "game") {
@@ -210,7 +240,7 @@ export class TableDO extends DurableObject<Env> {
       createdAt: Date.now(), timer: null, rebuyRequests: [], departed: [], logSeq: 0, chatSeq: 0, leaving: [],
       pendingConfig: null, autoSatOut: [], options: defaultOptions(), hud: {}, cur: null, unlocked: [], votes: {}, rabbitShown: null,
       flags: args.flags ? normalizeFlags(args.flags) : defaultFlags(),
-      ghostVote: null, lastTaunt: {}, gameChoice: null, gameChosenFor: 0, orbitLeft: 0, firstButton: null, lastActions: {},
+      ghostVote: null, lastTaunt: {}, gameChoice: null, gameChosenFor: 0, orbitLeft: 0, firstButton: null, lastActions: {}, endPending: false, rabbitShownHands: [],
     };
     this.game = createGame(validateConfig(args.config));
     this.log("system", `Table created by ${args.hostName}.`);
@@ -271,6 +301,11 @@ export class TableDO extends DurableObject<Env> {
       try { this.applyFlags(normalizeFlags(JSON.parse(rawFlags)), false); } catch { /* ignore malformed */ }
     }
 
+    // At most 4 sockets per user (several tabs or devices); close the oldest beyond that.
+    const mine = this.ctx.getWebSockets(userId);
+    for (const old of mine.slice(0, Math.max(0, mine.length - 3))) {
+      try { old.close(4000, "Opened in another tab"); } catch { /* already closed */ }
+    }
     const pair = new WebSocketPair();
     const [client, server] = [pair[0], pair[1]];
     this.ctx.acceptWebSocket(server, [userId]);
@@ -301,21 +336,36 @@ export class TableDO extends DurableObject<Env> {
     if (typeof raw !== "string") return;
     const att = ws.deserializeAttachment() as Attachment | null;
     if (!att || !this.meta || !this.game) return;
+    if (raw.length > 8192) return this.send(ws, { t: "error", code: "too_big", message: "Message too large" });
     let msg: ClientMessage;
     try {
       msg = JSON.parse(raw) as ClientMessage;
     } catch {
       return this.send(ws, { t: "error", code: "bad_json", message: "Malformed message" });
     }
-    if (msg.t !== "ping" && msg.t !== "listHands" && msg.t !== "getHand") {
-      const m = msg as unknown as Record<string, unknown>;
-      const detail: LogFields = {};
-      if (msg.t === "action") Object.assign(detail, { action: msg.action.type, amount: msg.action.amount, seq: msg.seq, actor: this.game.hand?.actor ?? null, actionSeq: this.game.hand?.actionSeq ?? null });
-      else if (msg.t === "chat") detail.len = String(m.text ?? "").length;
-      else for (const [k, v] of Object.entries(m)) if (k !== "t" && (typeof v !== "object" || v === null)) detail[k] = v;
-      this.slog("info", `msg.${msg.t}`, { user: att.name, seat: this.seatOf(att.userId)?.seat ?? null, ...detail });
+    if (!msg || typeof msg !== "object" || Array.isArray(msg) || typeof (msg as { t?: unknown }).t !== "string") {
+      return this.send(ws, { t: "error", code: "bad_message", message: "Malformed message" });
+    }
+    if (msg.t !== "ping" && !this.allowMessage(att.userId)) {
+      return this.send(ws, { t: "error", code: "slow_down", message: "Too many messages. Slow down a little." });
     }
     try {
+      if (msg.t !== "ping" && msg.t !== "listHands" && msg.t !== "getHand") {
+        const m = msg as unknown as Record<string, unknown>;
+        const detail: LogFields = {};
+        if (msg.t === "action") {
+          const a = (m.action && typeof m.action === "object" ? m.action : {}) as Record<string, unknown>;
+          Object.assign(detail, { action: String(a.type ?? "").slice(0, 16), amount: Number(a.amount), seq: Number(m.seq), actor: this.game.hand?.actor ?? null, actionSeq: this.game.hand?.actionSeq ?? null });
+        } else if (msg.t === "chat") detail.len = String(m.text ?? "").length;
+        else {
+          let n = 0;
+          for (const [k, v] of Object.entries(m)) {
+            if (k === "t" || (typeof v === "object" && v !== null) || n++ >= 6) continue;
+            detail[k.slice(0, 24)] = typeof v === "string" ? v.slice(0, 64) : v;
+          }
+        }
+        this.slog("info", `msg.${msg.t.slice(0, 24)}`, { user: att.name, seat: this.seatOf(att.userId)?.seat ?? null, ...detail });
+      }
       this.handle(ws, att, msg);
     } catch (e) {
       if (e instanceof EngineError) {
@@ -387,6 +437,7 @@ export class TableDO extends DurableObject<Env> {
         const g = this.game!;
         if (this.seatOf(att.userId)) throw new EngineError("already_seated", "You are already seated");
         const seatNo = Number(msg.seat);
+        if (!Number.isInteger(seatNo) || seatNo < 0 || seatNo >= g.seats.length) throw new EngineError("bad_seat", "No such seat");
         const maxBuy = g.config.startingStack;
         const buyIn = Math.floor(Number(msg.buyIn));
         if (!Number.isFinite(buyIn) || buyIn < g.config.bigBlind || buyIn > maxBuy) {
@@ -414,7 +465,7 @@ export class TableDO extends DurableObject<Env> {
       case "stand": {
         const seat = this.seatOf(att.userId);
         if (!seat) throw new EngineError("not_seated", "You are not seated");
-        this.leaveSeat(seat.seat, "left the table");
+        this.leaveSeat(seat.seat, "left the table", true);
         return;
       }
 
@@ -540,7 +591,7 @@ export class TableDO extends DurableObject<Env> {
         const seat = this.seatOf(msg.playerId);
         if (!seat) return;
         if (seat.playerId === meta.hostId) throw new EngineError("bad_kick", "You cannot kick yourself");
-        this.leaveSeat(seat.seat, "was removed by the host");
+        this.leaveSeat(seat.seat, "was removed by the host", false);
         return;
       }
 
@@ -572,6 +623,13 @@ export class TableDO extends DurableObject<Env> {
 
       case "end": {
         requireHost();
+        if (isHandLive(this.game!)) {
+          if (meta.endPending) return;
+          meta.endPending = true;
+          this.log("system", "The host is ending the session. It ends when this hand finishes.");
+          this.afterChange();
+          return;
+        }
         this.endSession();
         return;
       }
@@ -595,6 +653,7 @@ export class TableDO extends DurableObject<Env> {
         if (!h || h.phase !== "showdown" || h.boards[0]!.length >= 5) throw new EngineError("no_rabbit", "Nothing to rabbit hunt");
         if (meta.rabbitShown === h.number) return;
         meta.rabbitShown = h.number;
+        meta.rabbitShownHands = [...meta.rabbitShownHands.filter((x) => x !== h.number), h.number].slice(-200);
         const cards = rabbitBoards(h);
         this.log("system", `${att.name} rabbit hunts: ${cards.map((b) => b.join(" ")).join(" | ")} would have come.`);
         this.afterChange();
@@ -664,7 +723,8 @@ export class TableDO extends DurableObject<Env> {
         if (meta.unlocked.includes(n)) return;
         const key = String(n);
         const list = meta.votes[key] ?? [];
-        if (!list.includes(att.userId)) list.push(att.userId);
+        if (list.includes(att.userId)) return;
+        list.push(att.userId);
         meta.votes[key] = list;
         const needed = Math.floor(rec.players.length / 2) + 1;
         if (list.length >= needed) {
@@ -857,10 +917,11 @@ export class TableDO extends DurableObject<Env> {
     }
     // remove players who left mid-hand
     for (const seatNo of meta.leaving) {
-      const seat = g.seats[seatNo];
+      const seat = this.game!.seats[seatNo];
       if (seat) this.departSeat(seatNo);
     }
     meta.leaving = [];
+    if (meta.endPending) this.endSession();
   }
 
   private afterChange() {
@@ -970,7 +1031,12 @@ export class TableDO extends DurableObject<Env> {
     if (seat.status === "sittingOut" && !seat.disconnected) seat.status = "active";
   }
 
-  private leaveSeat(seatNo: number, verb: string) {
+  /**
+   * Leave (or be kicked from) a seat. Mid-hand, the seat goes at showdown. A player who stands up voluntarily
+   * during a betting or discard round folds; nobody is ever folded once their chips are all in or the betting
+   * is over, and a kick never folds anyone (the host could otherwise kick a player who is ahead).
+   */
+  private leaveSeat(seatNo: number, verb: string, voluntary: boolean) {
     const g = this.game!;
     const seat = g.seats[seatNo]!;
     const meta = this.meta!;
@@ -982,7 +1048,9 @@ export class TableDO extends DurableObject<Env> {
       this.log("system", `${seat.name} ${verb}.`);
       seat.status = "sittingOut";
       meta.leaving.push(seatNo);
-      if (hp.folded) {
+      const canFold = voluntary && !hp.folded && !hp.allIn && (g.hand!.phase === "betting" || g.hand!.phase === "discard");
+      if (!canFold) {
+        if (!hp.folded) this.log("system", `${seat.name} plays out this hand and leaves when it ends.`);
         this.afterChange();
         return;
       }
@@ -1167,6 +1235,7 @@ export class TableDO extends DurableObject<Env> {
     return {
       code: meta.code, name: meta.name, status: meta.status, hostId: meta.hostId, config: g.config, seats, button: g.button,
       handCount: g.handCount, hand, timer: meta.timer, options: meta.options, hud: meta.flags.hud ? meta.hud : {}, flags: meta.flags,
+      endPending: meta.endPending,
       dealerChoice: this.dealersChoiceOn()
         ? {
             mode: g.config.dealersChoice as "hand" | "orbit",
@@ -1220,8 +1289,10 @@ export class TableDO extends DurableObject<Env> {
 
   private recordView(rec: HandRecord, userId: string): HandRecordView {
     const info = this.voteInfo(rec, userId);
+    const meta = this.meta!;
     return {
       ...rec,
+      rabbit: info.unlocked || meta.rabbitShownHands.includes(rec.number) ? rec.rabbit : rec.rabbit.map(() => []),
       players: rec.players.map((p) => {
         const visible = info.unlocked || p.playerId === userId || p.revealed;
         return { ...p, hole: visible ? p.hole : p.hole.map(() => null), discarded: visible ? p.discarded : p.discarded.map(() => null) };

@@ -28,6 +28,18 @@ async function context(req: Request, env: Env): Promise<Ctx> {
 
 const disabled = () => error(403, "disabled", "This feature is switched off right now");
 
+function clientIp(req: Request): string {
+  return (req.headers.get("cf-connecting-ip") ?? "local").slice(0, 64);
+}
+
+/** Per-isolate cache for /api/status so it can't be used to wake 50 Durable Objects per request. */
+let statusCache: { at: number; body: Record<string, unknown> } | null = null;
+
+/** Neutralise @mentions and inline images in text we post to GitHub on a player's behalf. */
+function githubSafe(text: string): string {
+  return text.replace(/@/g, "@\u200b").replace(/!\[/g, "[").replace(/<img/gi, "&lt;img");
+}
+
 async function readBody(req: Request): Promise<Record<string, unknown>> {
   try {
     const b = (await req.json()) as unknown;
@@ -49,13 +61,13 @@ async function handleApi(req: Request, env: Env, path: string): Promise<Response
     if (path === "/api/signup" && method === "POST") {
       if (!(await acc.flags()).signup) return error(403, "signups_closed", "Signups are closed right now");
       const b = await readBody(req);
-      const { user, token } = await acc.signup(String(b.username ?? "").trim(), String(b.pin ?? ""));
+      const { user, token } = await acc.signup(String(b.username ?? "").trim(), String(b.pin ?? ""), clientIp(req));
       slog("info", "auth.signup", { user: user.username, userId: user.id });
       return json({ user }, { headers: { "set-cookie": cookieHeader(req, token) } });
     }
     if (path === "/api/login" && method === "POST") {
       const b = await readBody(req);
-      const { user, token } = await acc.login(String(b.username ?? "").trim(), String(b.pin ?? "")).catch((e) => {
+      const { user, token } = await acc.login(String(b.username ?? "").trim(), String(b.pin ?? ""), clientIp(req)).catch((e) => {
         slog("warn", "auth.loginFailed", { user: String(b.username ?? "").trim().slice(0, 24), code: (e as { code?: string })?.code });
         throw e;
       });
@@ -74,8 +86,9 @@ async function handleApi(req: Request, env: Env, path: string): Promise<Response
     if (path === "/api/status" && method === "GET") {
       // Deploy guard: counts only (no table codes). A table is "in play" when a hand is live, or when the
       // session is running/paused with someone connected and activity in the last 20 minutes.
-      const codes = await acc.openTableCodes();
       const now = Date.now();
+      if (statusCache && now - statusCache.at < 15_000) return json(statusCache.body, { headers: { "cache-control": "no-store" } });
+      const codes = await acc.openTableCodes();
       const rows = await Promise.all(codes.map(async (code) => {
         try { return await env.TABLE.get(env.TABLE.idFromName(code)).liveness(); } catch { return null; }
       }));
@@ -85,7 +98,9 @@ async function handleApi(req: Request, env: Env, path: string): Promise<Response
         if (r.handLive) handsLive++;
         if (r.handLive || ((r.status === "running" || r.status === "paused") && r.sockets > 0 && now - r.lastActivityAt < 20 * 60_000)) sessionsLive++;
       }
-      return json({ ok: true, checkedAt: now, tables: codes.length, sessionsLive, handsLive }, { headers: { "cache-control": "no-store" } });
+      const body = { ok: true, checkedAt: now, tables: codes.length, sessionsLive, handsLive };
+      statusCache = { at: now, body };
+      return json(body, { headers: { "cache-control": "no-store" } });
     }
     if (path === "/api/flags" && method === "GET") {
       return json({ flags: await acc.flags() });
@@ -97,6 +112,7 @@ async function handleApi(req: Request, env: Env, path: string): Promise<Response
       let b: Record<string, unknown> = {};
       try { b = JSON.parse(raw) as Record<string, unknown>; } catch { /* keep empty */ }
       const who = (await context(req, env)).user;
+      if (!who) return json({ ok: false }, { status: 401 });
       const str = (v: unknown, n: number) => String(v ?? "").slice(0, n);
       slog("warn", "client.error", { user: who?.username ?? null, kind: str(b.kind, 40), message: str(b.message, 500), path: str(b.path, 100), src: str(b.src, 200), stack: str(b.stack, 1500), ua: str(b.ua, 200) });
       return json({ ok: true });
@@ -130,8 +146,8 @@ async function handleApi(req: Request, env: Env, path: string): Promise<Response
       if (!flags.feedback) return disabled();
       const b = await readBody(req);
       const kind = b.kind === "bug" ? "bug" : "idea";
-      const title = String(b.title ?? "").replace(/\s+/g, " ").trim().slice(0, 120);
-      const details = String(b.details ?? "").trim().slice(0, 4000);
+      const title = githubSafe(String(b.title ?? "").replace(/\s+/g, " ").trim().slice(0, 120));
+      const details = githubSafe(String(b.details ?? "").trim().slice(0, 4000));
       if (title.length < 3) return error(400, "bad_feedback", "Add a short title");
       const ctxInfo = (b.context && typeof b.context === "object" ? b.context : {}) as Record<string, unknown>;
       const str = (v: unknown, n: number) => String(v ?? "").slice(0, n);
@@ -235,6 +251,8 @@ export default {
     const ws = path.match(/^\/ws\/table\/([A-Za-z0-9]+)$/);
     if (ws) {
       if (req.headers.get("upgrade") !== "websocket") return error(426, "upgrade", "WebSocket expected");
+      const origin = req.headers.get("origin");
+      if (origin && new URL(origin).host !== url.host) return error(403, "bad_origin", "Cross-site connection refused");
       const ctx = await context(req, env);
       const user = ctx.user;
       if (!user) return error(401, "unauthorized", "Please log in");

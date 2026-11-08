@@ -38,7 +38,7 @@ export function createGame(config: TableConfig): GameState {
 
 export function seatPlayer(state: GameState, seat: number, playerId: string, name: string, stack: number): GameState {
   const s = structuredClone(state);
-  if (seat < 0 || seat >= s.seats.length) throw new EngineError("bad_seat", "No such seat");
+  if (!Number.isInteger(seat) || seat < 0 || seat >= s.seats.length) throw new EngineError("bad_seat", "No such seat");
   if (s.seats[seat]) throw new EngineError("seat_taken", "Seat is taken");
   if (s.seats.some((x) => x?.playerId === playerId)) throw new EngineError("already_seated", "Already seated");
   s.seats[seat] = {

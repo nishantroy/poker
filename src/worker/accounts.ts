@@ -79,6 +79,11 @@ CREATE TABLE IF NOT EXISTS flags (
   updated_at INTEGER NOT NULL,
   updated_by TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS rate (
+  key TEXT PRIMARY KEY,
+  count INTEGER NOT NULL,
+  window_start INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS feedback (
   id INTEGER PRIMARY KEY,
   user_id TEXT NOT NULL,
@@ -105,7 +110,22 @@ export class AccountsDO extends DurableObject<Env> {
 
   // ---------- auth ----------
 
-  async signup(username: string, pin: string): Promise<{ user: UserInfo; token: string }> {
+  /** Fixed-window counter. Returns false (and does not count) once `limit` is reached in the window. */
+  private hit(key: string, limit: number, windowMs: number): boolean {
+    const now = Date.now();
+    const row = this.sql.exec<{ count: number; window_start: number }>("SELECT count, window_start FROM rate WHERE key = ?", key).toArray()[0];
+    if (!row || now - row.window_start >= windowMs) {
+      this.sql.exec("INSERT INTO rate (key, count, window_start) VALUES (?, 1, ?) ON CONFLICT(key) DO UPDATE SET count = 1, window_start = excluded.window_start", key, now);
+      if (Math.random() < 0.02) this.sql.exec("DELETE FROM rate WHERE window_start < ?", now - 24 * 60 * 60 * 1000);
+      return true;
+    }
+    if (row.count >= limit) return false;
+    this.sql.exec("UPDATE rate SET count = count + 1 WHERE key = ?", key);
+    return true;
+  }
+
+  async signup(username: string, pin: string, ip = "unknown"): Promise<{ user: UserInfo; token: string }> {
+    if (!this.hit(`signup:${ip}`, 5, 60 * 60 * 1000)) throw new AuthError(429, "too_many", "Too many new accounts from here. Try again later.");
     if (!LIMITS.usernameRe.test(username)) throw new AuthError(400, "bad_username", "Username: 2–20 letters, numbers or _");
     if (!LIMITS.pinRe.test(pin)) throw new AuthError(400, "bad_pin", "PIN must be 4–6 digits");
     const exists = this.sql.exec("SELECT id FROM users WHERE username = ?", username).toArray();
@@ -119,9 +139,15 @@ export class AccountsDO extends DurableObject<Env> {
     return { user: { id, username, createdAt: now }, token };
   }
 
-  async login(username: string, pin: string): Promise<{ user: UserInfo; token: string }> {
+  async login(username: string, pin: string, ip = "unknown"): Promise<{ user: UserInfo; token: string }> {
     const now = Date.now();
-    const key = username.toLowerCase();
+    // Lockout is per username *and* network, so someone guessing from elsewhere can't lock the real player out.
+    // A per-network cap on failures (across all usernames) slows down spraying.
+    const key = `${username.toLowerCase()}|${ip}`;
+    const ipRow = this.sql.exec<{ count: number; window_start: number }>("SELECT count, window_start FROM rate WHERE key = ?", `loginfail:${ip}`).toArray()[0];
+    if (ipRow && now - ipRow.window_start < 60 * 60 * 1000 && ipRow.count >= 30) {
+      throw new AuthError(429, "locked", "Too many failed logins from here. Try again later.");
+    }
     const att = this.sql.exec<{ failures: number; locked_until: number }>(
       "SELECT failures, locked_until FROM login_attempts WHERE username = ?", key,
     ).toArray()[0];
@@ -132,8 +158,11 @@ export class AccountsDO extends DurableObject<Env> {
     const row = this.sql.exec<{ id: string; username: string; pin_hash: string; salt: string; created_at: number }>(
       "SELECT id, username, pin_hash, salt, created_at FROM users WHERE username = ?", username,
     ).toArray()[0];
-    const ok = row ? timingSafeEqual(await hashPin(pin, row.salt), row.pin_hash) : false;
+    // Hash even for unknown usernames so response time doesn't reveal which accounts exist.
+    const computed = await hashPin(pin, row ? row.salt : "00000000000000000000000000000000");
+    const ok = row ? timingSafeEqual(computed, row.pin_hash) : false;
     if (!ok || !row) {
+      this.hit(`loginfail:${ip}`, 1_000_000, 60 * 60 * 1000);
       const failures = (att?.failures ?? 0) + 1;
       // exponential lockout after 5 failures: 30s, 60s, 120s ... capped at 15 min
       const lockMs = failures >= 5 ? Math.min(15 * 60_000, 30_000 * 2 ** (failures - 5)) : 0;

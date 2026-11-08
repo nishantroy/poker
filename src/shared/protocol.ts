@@ -163,6 +163,8 @@ export interface TableView {
   /** Operator feature flags in force at this table. */
   flags: Flags;
   ghost: GhostInfo;
+  /** The host ended the session during a hand; it ends when the hand finishes. */
+  endPending: boolean;
   /** Dealer's choice state; null when the table does not play dealer's choice. */
   dealerChoice: DealerChoiceInfo | null;
   me: {
