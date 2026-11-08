@@ -270,6 +270,37 @@ assert(A.errors.every((e) => e.code === "disabled" || e.code === "taunt_cooldown
   assert(bad.status === 400, "feedback needs a title");
 }
 
+// ----- leaving mid-hand cannot inflate the ledger -----
+{
+  const c = await login(`smoke_c_${suffix}`, "1234");
+  const r4 = await fetch(`${BASE}/api/tables`, { method: "POST", headers: { "content-type": "application/json", cookie: a.cookie }, body: JSON.stringify({ name: "Smoke ledger", config: { variant: "nlhe", smallBlind: 1, bigBlind: 2, startingStack: 200, actionTimerMs: 8000, maxRuns: 1 } }) });
+  const code4 = (await r4.json()).code;
+  const P = [await connect(a, code4), await connect(b, code4), await connect(c, code4)];
+  const seatsOf = [0, 2, 4];
+  P.forEach((p, i) => send(p, { t: "sit", seat: seatsOf[i], buyIn: 200 }));
+  await wait(300); send(P[0], { t: "start" }); await wait(500);
+  const h = P[0].view.hand;
+  const folder = seatsOf.indexOf(h.actor);
+  send(P[folder], { t: "action", seq: h.actionSeq, action: { type: "fold" } });
+  await wait(300);
+  for (let i = 0; i < 3; i++) { send(P[folder], { t: "stand" }); await wait(150); }
+  assert(P[0].view.hand.phase !== "showdown" && P[0].view.seats[seatsOf[folder]] !== null, "folded player who stands stays seated until the hand ends");
+  for (let i = 0; i < 30 && P[0].view.hand.phase !== "showdown"; i++) {
+    const hh = P[0].view.hand;
+    if (hh.phase === "betting") { const k = seatsOf.indexOf(hh.actor); send(P[k], { t: "action", seq: hh.actionSeq, action: { type: P[k].view.me.limits.canCheck ? "check" : "call" } }); }
+    await wait(300);
+  }
+  await wait(300);
+  assert(P[0].view.seats[seatsOf[folder]] === null, "the player leaves once the hand is over");
+  send(P[0], { t: "end" }); await wait(800);
+  const res = P[0].ended;
+  const sum = res.reduce((x, r) => x + r.net, 0);
+  const leaver = res.find((r) => r.userId === [a, b, c][folder].user.id);
+  assert(res.length === 3 && sum === 0, `session nets sum to zero after repeated stand requests (sum ${sum})`);
+  assert(leaver && leaver.buyIn === 200 && leaver.net === leaver.cashOut - 200 && leaver.cashOut <= 200, "the leaver is counted once with their real cash-out");
+  P.forEach((p) => p.ws.close());
+}
+
 // ----- dealer's choice and running it twice -----
 {
   const r3 = await fetch(`${BASE}/api/tables`, { method: "POST", headers: { "content-type": "application/json", cookie: a.cookie }, body: JSON.stringify({ name: "Smoke DC", config: { variant: "nlhe", smallBlind: 1, bigBlind: 2, startingStack: 200, actionTimerMs: 8000, maxRuns: 3, dealersChoice: "hand" } }) });

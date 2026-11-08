@@ -974,15 +974,23 @@ export class TableDO extends DurableObject<Env> {
     const g = this.game!;
     const seat = g.seats[seatNo]!;
     const meta = this.meta!;
-    const inHand = isHandLive(g) && g.hand!.players.some((p) => p.seat === seatNo && !p.folded);
-    this.log("system", `${seat.name} ${verb}.`);
-    if (inHand) {
+    // Anyone dealt into the live hand (folded or not) leaves when it ends: their chips can still change
+    // hands until showdown, so the ledger must not be written yet.
+    const hp = isHandLive(g) ? g.hand!.players.find((p) => p.seat === seatNo) : undefined;
+    if (hp) {
+      if (meta.leaving.includes(seatNo)) return; // already leaving: repeat requests are no-ops
+      this.log("system", `${seat.name} ${verb}.`);
       seat.status = "sittingOut";
-      if (!meta.leaving.includes(seatNo)) meta.leaving.push(seatNo);
+      meta.leaving.push(seatNo);
+      if (hp.folded) {
+        this.afterChange();
+        return;
+      }
       const res = forfeit(g, seatNo);
       this.applyStep(res.state, res.events);
       return;
     }
+    this.log("system", `${seat.name} ${verb}.`);
     this.departSeat(seatNo);
     this.afterChange();
     void accounts(this.env).updateTable(meta.code, { players: this.playerCount() });
@@ -994,6 +1002,8 @@ export class TableDO extends DurableObject<Env> {
     const seat = g.seats[seatNo];
     if (!seat) return;
     const meta = this.meta!;
+    // Remove first: if the engine refuses (seat still in a live hand) nothing below may run.
+    const next = removePlayer(g, seatNo);
     const prior = meta.departed.find((d) => d.userId === seat.playerId);
     const entry: Departed = {
       userId: seat.playerId, name: seat.name,
@@ -1006,7 +1016,8 @@ export class TableDO extends DurableObject<Env> {
     meta.departed.push(entry);
     meta.rebuyRequests = meta.rebuyRequests.filter((r) => r.playerId !== seat.playerId);
     meta.autoSatOut = meta.autoSatOut.filter((x) => x !== seatNo);
-    this.game = removePlayer(g, seatNo);
+    meta.leaving = meta.leaving.filter((x) => x !== seatNo);
+    this.game = next;
   }
 
   private sessionResults(): SessionResultRow[] {
