@@ -511,7 +511,8 @@ export class TableDO extends DurableObject<Env> {
         const h = g.hand;
         const seat = this.seatOf(att.userId);
         if (!h || h.phase !== "showdown" || !seat) throw new EngineError("cannot_show", "You can show your cards once the hand is over");
-        const hp = h.players.find((p) => p.seat === seat.seat);
+        // match the account, not just the seat: a seat can change hands after showdown
+        const hp = h.players.find((p) => p.seat === seat.seat && p.playerId === att.userId);
         if (!hp || hp.hole.length === 0) throw new EngineError("cannot_show", "You were not dealt into that hand");
         if (meta.shown.hand !== h.number) meta.shown = { hand: h.number, seats: [] };
         if (meta.shown.seats.includes(seat.seat) || (hp.revealed && !hp.folded)) return;
@@ -1043,7 +1044,7 @@ export class TableDO extends DurableObject<Env> {
     const g = this.game!;
     const seat = g.seats[seatNo];
     if (!seat) return;
-    const inHand = isHandLive(g) && g.hand!.players.some((p) => p.seat === seatNo);
+    const inHand = isHandLive(g) && g.hand!.players.some((p) => p.seat === seatNo && p.playerId === seat.playerId);
     if (inHand) {
       seat.pendingAdd += amount;
       this.log("system", `${seat.name} rebuys ${amount} (added after this hand).`);
@@ -1066,7 +1067,7 @@ export class TableDO extends DurableObject<Env> {
     const meta = this.meta!;
     // Anyone dealt into the live hand (folded or not) leaves when it ends: their chips can still change
     // hands until showdown, so the ledger must not be written yet.
-    const hp = isHandLive(g) ? g.hand!.players.find((p) => p.seat === seatNo) : undefined;
+    const hp = isHandLive(g) ? g.hand!.players.find((p) => p.seat === seatNo && p.playerId === seat.playerId) : undefined;
     if (hp) {
       if (meta.leaving.includes(seatNo)) return; // already leaving: repeat requests are no-ops
       this.log("system", `${seat.name} ${verb}.`);
@@ -1132,6 +1133,42 @@ export class TableDO extends DurableObject<Env> {
     return [...rows.values()].sort((a, b) => b.net - a.net);
   }
 
+  /**
+   * House rule for the ghost's bankroll when the night ends: split it equally between the players seated at the end
+   * (odd chips to the lowest seats), so every chip has an owner and session nets sum to zero. If nobody is seated,
+   * it goes to the players who left, in the same way.
+   */
+  private settleGhost() {
+    const g = this.game!;
+    const meta = this.meta!;
+    const pot = g.ghost.stack;
+    if (pot <= 0) return;
+    const seated = g.seats.filter((x): x is NonNullable<typeof x> => !!x).sort((a, b) => a.seat - b.seat);
+    const n = seated.length || meta.departed.length;
+    if (n === 0) return;
+    const each = Math.floor(pot / n);
+    let odd = pot - each * n;
+    const parts: string[] = [];
+    if (seated.length) {
+      for (const st of seated) {
+        const amt = each + (odd > 0 ? 1 : 0);
+        if (odd > 0) odd--;
+        st.stack += amt;
+        parts.push(`${st.name} ${amt}`);
+      }
+    } else {
+      for (const d of meta.departed) {
+        const amt = each + (odd > 0 ? 1 : 0);
+        if (odd > 0) odd--;
+        d.cashOut += amt;
+        parts.push(`${d.name} ${amt}`);
+      }
+    }
+    g.ghost.stack = 0;
+    this.log("result", `👻 The ghost's ${pot} is split at the end of the session: ${parts.join(", ")}.`);
+    this.slog("info", "ghost.settled", { pot, parts });
+  }
+
   private endSession() {
     const g = this.game!;
     const meta = this.meta!;
@@ -1145,6 +1182,7 @@ export class TableDO extends DurableObject<Env> {
       h.pendingDiscard = [];
       this.log("system", "Current hand voided; bets returned.");
     }
+    this.settleGhost();
     this.slog("info", "session.end", { seats: this.seatsSnapshot(), departed: meta.departed.length });
     meta.status = "ended";
     meta.gameChoice = null;
@@ -1210,20 +1248,24 @@ export class TableDO extends DurableObject<Env> {
 
     const seats: (PublicSeat | null)[] = g.seats.map((s) => {
       if (!s) return null;
-      const hp = h?.players.find((p) => p.seat === s.seat) ?? null;
+      // The hand participant must be this seat's current occupant: after showdown a seat can be taken by someone else,
+      // who must not inherit the previous player's cards, hand or actions.
+      const hp = h?.players.find((p) => p.seat === s.seat && p.playerId === s.playerId) ?? null;
       const mine = s.playerId === userId;
       let cards: (Card | null)[] | null = null;
+      let shownNow = false;
       if (hp) {
         const shownByChoice = !!h && h.phase === "showdown" && meta.shown.hand === h.number && meta.shown.seats.includes(s.seat);
+        shownNow = shownByChoice;
         const visible = mine || (hp.revealed && showAll && !hp.folded) || shownByChoice;
         cards = visible ? [...hp.hole] : hp.folded ? [] : hp.hole.map(() => null);
       }
-      const shown = h?.result?.hands[s.seat];
+      const shown = hp ? h?.result?.hands[s.seat] : undefined;
       return {
         seat: s.seat, playerId: s.playerId, name: s.name, stack: s.stack, status: s.status, disconnected: s.disconnected,
         isHost: s.playerId === meta.hostId, inHand: !!hp, folded: hp?.folded ?? false, allIn: hp?.allIn ?? false,
         streetBet: hp?.streetBet ?? 0, totalBet: hp?.totalBet ?? 0, cards, discarded: hp?.discarded.length ?? 0,
-        revealed: !!hp && ((hp.revealed && showAll && !hp.folded) || (!!h && h.phase === "showdown" && meta.shown.hand === h.number && meta.shown.seats.includes(s.seat))), handName: shown?.name, bestCards: shown?.cards,
+        revealed: !!hp && ((hp.revealed && showAll && !hp.folded) || shownNow), handName: shown?.name, bestCards: shown?.cards,
         pendingAdd: s.pendingAdd, totalBuyIn: s.totalBuyIn,
         lastAction: hp && !hp.folded && h && h.phase !== "showdown" ? meta.lastActions[s.seat] ?? null : null,
       };

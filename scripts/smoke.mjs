@@ -186,7 +186,16 @@ assert(A.log.some((l) => l.includes("Board") && l.includes("eliminated")), "elim
 send(A, { t: "config", patch: { boards: 1 } });
 
 // ----- feature flags -----
-const admin = await login("smoke_admin", "1234"); // ADMIN_USERS=smoke_admin in .dev.vars
+const admin = await login("smoke_admin", "1234");
+{
+  const badClaim = await fetch(`${BASE}/api/admin/claim`, { method: "POST", headers: { "content-type": "application/json", cookie: a.cookie }, body: JSON.stringify({ token: "guess" }) });
+  assert(badClaim.status === 403, "admin cannot be claimed with a wrong token");
+  const claim = await fetch(`${BASE}/api/admin/claim`, { method: "POST", headers: { "content-type": "application/json", cookie: admin.cookie }, body: JSON.stringify({ token: "dev-only-bootstrap-token-0001" }) }); // ADMIN_BOOTSTRAP_TOKEN in .dev.vars
+  assert(claim.ok, "admin granted by the private bootstrap token");
+  const fresh = await login(`smoke_new_${suffix}`, "1234");
+  const freshMe = await (await fetch(`${BASE}/api/me`, { headers: { cookie: fresh.cookie } })).json();
+  assert(freshMe.isAdmin === false, "signing up never grants admin");
+}
 const setFlag = async (name, enabled) => {
   const r = await fetch(`${BASE}/api/admin/flags`, { method: "PUT", headers: { "content-type": "application/json", cookie: admin.cookie }, body: JSON.stringify({ name, enabled }) });
   if (!r.ok) throw new Error(`setFlag ${name} ${r.status}`);
@@ -228,8 +237,16 @@ const pub = await (await fetch(`${BASE}/api/flags`)).json();
 assert(pub.flags && Object.keys(pub.flags).length >= 14, "public flags endpoint");
 
 send(A, { t: "end" });
-await wait(600);
+for (let i = 0; i < 60 && !A.ended; i++) {
+  // ending waits for a live hand: play it out
+  const h = A.view.hand;
+  if (h && h.phase === "betting" && h.actor !== null) { const c = h.actor === 0 ? A : B2; send(c, { t: "action", seq: h.actionSeq, action: { type: c.view.me.limits?.canCheck ? "check" : "call" } }); }
+  if (h && h.phase === "runChoice") for (const [c, seat] of [[A, 0], [B2, 3]]) if (h.runChoice.pending.includes(seat)) send(c, { t: "runs", runs: 1 });
+  if (h && h.phase === "discard") for (const [c, seat] of [[A, 0], [B2, 3]]) if (h.pendingDiscard.includes(seat)) send(c, { t: "action", seq: h.actionSeq, action: { type: "discard", amount: 0 } });
+  await wait(400);
+}
 assert(Array.isArray(A.ended) && A.ended.length === 2, "session ended with results for both players");
+assert(A.ended.reduce((x, r) => x + r.net, 0) === 0, `ghost session nets sum to zero (ghost chips are settled; nets ${A.ended.map((r) => r.net)})`);
 const lb = await (await fetch(`${BASE}/api/leaderboard`, { headers: { cookie: a.cookie } })).json();
 assert(lb.rows.some((x) => x.username === a.user.username), "leaderboard includes the player");
 const stats = await (await fetch(`${BASE}/api/stats/me`, { headers: { cookie: a.cookie } })).json();
@@ -290,13 +307,26 @@ assert(A.errors.every((e) => e.code === "disabled" || e.code === "taunt_cooldown
     if (hh.phase === "betting") { const k = seatsOf.indexOf(hh.actor); send(P[k], { t: "action", seq: hh.actionSeq, action: { type: P[k].view.me.limits.canCheck ? "check" : "call" } }); }
     await wait(300);
   }
-  await wait(300);
   assert(P[0].view.seats[seatsOf[folder]] === null, "the player leaves once the hand is over");
-  send(P[0], { t: "end" }); await wait(800);
+  // someone else takes the empty seat while the finished hand is still on the table
+  const d = await login(`smoke_d_${suffix}`, "1234");
+  const Q = await connect(d, code4);
+  send(Q, { t: "sit", seat: seatsOf[folder], buyIn: 200 }); await wait(250);
+  const mySeatView = Q.view.seats[seatsOf[folder]];
+  assert(Q.view.hand?.phase === "showdown" && mySeatView && mySeatView.playerId === d.user.id && !mySeatView.inHand && !(mySeatView.cards ?? []).some(Boolean), "a new player in a reused seat does not get the previous player's cards");
+  send(Q, { t: "show" }); await wait(200);
+  assert(Q.errors.some((e) => e.code === "cannot_show"), "a new player in a reused seat cannot show the previous player's cards");
+  P.push(Q);
+  send(P[0], { t: "end" });
+  for (let i = 0; i < 40 && !P[0].ended; i++) {
+    const hh = P[0].view.hand; // play out any hand that started meanwhile
+    if (hh && hh.phase === "betting") { const k = [...seatsOf].indexOf(hh.actor); const who = k >= 0 && k !== folder ? P[k] : Q; send(who, { t: "action", seq: hh.actionSeq, action: { type: who.view.me.limits?.canCheck ? "check" : "call" } }); }
+    await wait(400);
+  }
   const res = P[0].ended;
   const sum = res.reduce((x, r) => x + r.net, 0);
   const leaver = res.find((r) => r.userId === [a, b, c][folder].user.id);
-  assert(res.length === 3 && sum === 0, `session nets sum to zero after repeated stand requests (sum ${sum})`);
+  assert(res.length === 4 && sum === 0, `session nets sum to zero after repeated stand requests (sum ${sum})`);
   assert(leaver && leaver.buyIn === 200 && leaver.net === leaver.cashOut - 200 && leaver.cashOut <= 200, "the leaver is counted once with their real cash-out");
   P.forEach((p) => p.ws.close());
 }

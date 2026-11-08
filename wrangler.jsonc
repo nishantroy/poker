@@ -32,8 +32,9 @@
     { "tag": "v1", "new_sqlite_classes": ["TableDO", "AccountsDO"] }
   ],
   "vars": {
-    // Comma-separated usernames that may flip feature flags. The first account ever created is always an admin.
-    "ADMIN_USERS": "",
+    // Comma-separated account ids (never usernames) with admin rights. Admins can also be granted through the
+    // ADMIN_BOOTSTRAP_TOKEN secret (POST /api/admin/claim). Signing up never grants admin.
+    "ADMIN_USER_IDS": "",
     // In-app feedback becomes GitHub issues here. Needs the GITHUB_TOKEN secret (wrangler secret put GITHUB_TOKEN).
     "FEEDBACK_REPO": "nishantroy/poker"
   },

@@ -79,6 +79,15 @@ CREATE TABLE IF NOT EXISTS flags (
   updated_at INTEGER NOT NULL,
   updated_by TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS admins (
+  user_id TEXT PRIMARY KEY,
+  granted_at INTEGER NOT NULL,
+  how TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS rate (
   key TEXT PRIMARY KEY,
   count INTEGER NOT NULL,
@@ -110,6 +119,7 @@ export class AccountsDO extends DurableObject<Env> {
     this.sql = ctx.storage.sql;
     ctx.blockConcurrencyWhile(async () => {
       this.sql.exec(SCHEMA);
+      this.migrateAdmins();
     });
   }
 
@@ -203,12 +213,31 @@ export class AccountsDO extends DurableObject<Env> {
 
   // ---------- feature flags ----------
 
-  /** Admins: usernames listed in ADMIN_USERS, plus the first account ever created. */
-  isAdmin(user: UserInfo): boolean {
-    const listed = (this.env.ADMIN_USERS ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
-    if (listed.includes(user.username.toLowerCase())) return true;
+  /**
+   * One-time upgrade from the old rule ("the first account ever created is admin"): keep that account as an
+   * admin, bound to its id. On a fresh deployment nobody is granted anything; signups never grant admin.
+   */
+  private migrateAdmins() {
+    const done = this.sql.exec("SELECT value FROM settings WHERE key = 'admins_migrated'").toArray().length > 0;
+    if (done) return;
     const first = this.sql.exec<{ id: string }>("SELECT id FROM users ORDER BY created_at ASC, rowid ASC LIMIT 1").toArray()[0];
-    return !!first && first.id === user.id;
+    if (first) this.sql.exec("INSERT OR IGNORE INTO admins (user_id, granted_at, how) VALUES (?, ?, 'legacy-first-account')", first.id, Date.now());
+    this.sql.exec("INSERT INTO settings (key, value) VALUES ('admins_migrated', ?)", String(Date.now()));
+  }
+
+  /** Admins are bound to immutable account ids: the `admins` table, or ADMIN_USER_IDS in the Worker config. */
+  isAdmin(user: UserInfo): boolean {
+    const ids = (this.env.ADMIN_USER_IDS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+    if (ids.includes(user.id)) return true;
+    return this.sql.exec("SELECT 1 FROM admins WHERE user_id = ?", user.id).toArray().length > 0;
+  }
+
+  /** Private bootstrap: whoever presents ADMIN_BOOTSTRAP_TOKEN (a Worker secret, unset by default) becomes an admin. */
+  claimAdmin(userId: string, token: string): boolean {
+    const want = this.env.ADMIN_BOOTSTRAP_TOKEN ?? "";
+    if (want.length < 16 || !timingSafeEqual(token, want)) return false;
+    this.sql.exec("INSERT OR IGNORE INTO admins (user_id, granted_at, how) VALUES (?, ?, 'bootstrap-token')", userId, Date.now());
+    return true;
   }
 
   flags(): Flags {

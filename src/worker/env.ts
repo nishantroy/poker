@@ -5,8 +5,10 @@ export interface Env {
   TABLE: DurableObjectNamespace<TableDO>;
   ACCOUNTS: DurableObjectNamespace<AccountsDO>;
   ASSETS: Fetcher;
-  /** Comma-separated usernames allowed to change feature flags (see src/shared/flags.ts). */
-  ADMIN_USERS?: string;
+  /** Comma-separated account ids (not usernames) that are admins. */
+  ADMIN_USER_IDS?: string;
+  /** Secret, unset in production by default: presenting it at POST /api/admin/claim grants admin to the caller. */
+  ADMIN_BOOTSTRAP_TOKEN?: string;
   /** GitHub repo that receives in-app feedback, e.g. "nishantroy/poker". */
   FEEDBACK_REPO?: string;
   /** Secret: fine-grained GitHub token with Issues read/write on FEEDBACK_REPO. Without it, feedback falls back to a prefilled GitHub link. */

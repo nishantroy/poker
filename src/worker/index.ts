@@ -124,6 +124,13 @@ async function handleApi(req: Request, env: Env, path: string): Promise<Response
     if (!user) return error(401, "unauthorized", "Please log in");
     const flags = ctx.flags;
 
+    if (path === "/api/admin/claim" && method === "POST") {
+      const b = await readBody(req);
+      const ok = await acc.claimAdmin(user.id, String(b.token ?? "").slice(0, 200));
+      slog(ok ? "info" : "warn", "admin.claim", { user: user.username, ok });
+      if (!ok) return error(403, "bad_token", "That token is not valid");
+      return json({ ok: true });
+    }
     if (path === "/api/admin/flags" && method === "PUT") {
       if (!ctx.isAdmin) return error(403, "not_admin", "Only an admin can change feature flags");
       const b = await readBody(req);
