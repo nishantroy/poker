@@ -229,6 +229,28 @@ assert(stats.stats.hud.hands >= 1, "lifetime HUD updated at session end");
 const hudApi = await (await fetch(`${BASE}/api/hud?ids=${a.user.id},${b.user.id}`, { headers: { cookie: a.cookie } })).json();
 assert(hudApi.rows.length === 2, "HUD API returns both players");
 assert(A.errors.every((e) => e.code === "disabled" || e.code === "taunt_cooldown") && B2.errors.length === 0, "no unexpected socket errors");
+
+// ----- auto-deal survives a player dropping between hands -----
+{
+  const r2 = await fetch(`${BASE}/api/tables`, { method: "POST", headers: { "content-type": "application/json", cookie: a.cookie }, body: JSON.stringify({ name: "Smoke auto", config: { variant: "nlhe", smallBlind: 1, bigBlind: 2, startingStack: 200, actionTimerMs: 5000 } }) });
+  const code2 = (await r2.json()).code;
+  const C = await connect(a, code2); let D = await connect(b, code2);
+  send(C, { t: "sit", seat: 0, buyIn: 200 }); send(D, { t: "sit", seat: 1, buyIn: 200 });
+  await wait(300); send(C, { t: "start" }); await wait(500);
+  assert(C.view.hand?.number === 1, "auto-deal table: hand 1 started");
+  const h = C.view.hand; const actor = h.actor === 0 ? C : D;
+  send(actor, { t: "action", seq: h.actionSeq, action: { type: "fold" } });
+  await wait(200);
+  D.ws.close();
+  await wait(5000);
+  assert(C.view.status === "running", "table stays running when a player drops between hands");
+  assert(C.view.hand?.number === 1 && C.view.seats[1].status === "sittingOut", "dropped player is sat out and no hand is dealt short-handed");
+  D = await connect(b, code2);
+  await wait(4500);
+  assert(C.view.hand?.number === 2, "next hand deals itself when the player returns, no Start needed");
+  assert(C.errors.length === 0 && D.errors.length === 0, "auto-deal section had no socket errors");
+  C.ws.close(); D.ws.close();
+}
 A.ws.close(); B2.ws.close();
 console.log("\nSMOKE PASSED");
 process.exit(0);

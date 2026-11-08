@@ -609,7 +609,7 @@ export class TableDO extends DurableObject<Env> {
       this.log("system", `${s.name} is sitting out (disconnected).`);
     }
     if (!canStartHand(g)) {
-      this.meta!.status = this.meta!.status === "running" ? "waiting" : this.meta!.status;
+      // Stay "running": the next hand is dealt automatically once two players can play again (see schedule()).
       this.log("system", "Waiting for at least two players with chips.");
       this.afterChange();
       this.syncTableStatus();
@@ -705,7 +705,7 @@ export class TableDO extends DurableObject<Env> {
       timer = { kind: "discard", at: now + DISCARD_TIMER_MS, durationMs: DISCARD_TIMER_MS };
     } else if (h && h.phase === "runout") {
       timer = { kind: "runout", at: now + RUNOUT_PAUSE_MS, durationMs: RUNOUT_PAUSE_MS };
-    } else if ((!h || h.phase === "showdown") && meta.status === "running") {
+    } else if ((!h || h.phase === "showdown") && meta.status === "running" && canStartHand(g)) {
       const contested = !!h?.result && Object.keys(h.result.hands).length > 0;
       const d = (contested ? NEXT_HAND_DELAY_SHOWDOWN_MS : NEXT_HAND_DELAY_MS) + (h?.result?.badBeat && meta.flags.badBeat ? BAD_BEAT_EXTRA_MS : 0);
       timer = { kind: "nextHand", at: now + d, durationMs: d };

@@ -479,7 +479,7 @@ function StatusBar({ view, onSit, onStart, onRabbit }: { view: TableView; onSit:
   } else if (mySeat.status === "sittingOut") text = "You're sitting out. Open your menu to come back.";
   else if (mySeat.stack === 0 && !mySeat.inHand) text = "You're out of chips. Rebuy from your menu.";
   else if (!hand || hand.phase === "showdown") {
-    if (view.status === "running") text = view.timer?.kind === "nextHand" ? "Next hand starting…" : players < 2 ? "Waiting for another player…" : "Waiting…";
+    if (view.status === "running") text = view.timer?.kind === "nextHand" ? "Next hand starting…" : "Waiting for another player. The next hand deals itself.";
     else if (view.status === "paused") text = "Game paused by the host.";
     else {
       text = view.me.isHost ? (players >= 2 ? "Everyone seated? Start the game." : "Share the link so friends can join.") : "Waiting for the host to start.";
