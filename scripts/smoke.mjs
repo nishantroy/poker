@@ -369,6 +369,34 @@ assert(A.errors.every((e) => e.code === "disabled" || e.code === "taunt_cooldown
   H.ws.close(); V.ws.close();
 }
 
+// ----- straddle -----
+{
+  const r6 = await fetch(`${BASE}/api/tables`, { method: "POST", headers: { "content-type": "application/json", cookie: a.cookie }, body: JSON.stringify({ name: "Smoke straddle", config: { variant: "nlhe", smallBlind: 1, bigBlind: 2, startingStack: 200, actionTimerMs: 8000, maxRuns: 1, straddle: true } }) });
+  const code6 = (await r6.json()).code;
+  const c6 = await login(`smoke_c_${suffix}`, "1234");
+  const S = [await connect(a, code6), await connect(b, code6), await connect(c6, code6)];
+  send(S[2], { t: "straddle", on: true }); await wait(200);
+  assert(S[2].errors.some((e) => e.code === "not_seated"), "only seated players can opt in to straddle");
+  S.forEach((p, i) => send(p, { t: "sit", seat: i * 2, buyIn: 200 }));
+  await wait(300);
+  S.forEach((p) => send(p, { t: "straddle", on: true }));
+  await wait(300);
+  assert(S.every((p) => p.view.me.straddle === true), "players opted in to straddle");
+  send(S[0], { t: "start" }); await wait(600);
+  const h = S[0].view.hand;
+  const straddler = S[0].view.seats.find((x) => x && x.lastAction?.type === "straddle");
+  assert(h.currentBet === 4 && straddler && straddler.lastAction.amount === 4 && straddler.streetBet === 4, "under the gun straddles 2x the big blind");
+  assert(h.actor !== straddler.seat && h.actor !== h.bigBlindSeat, "action starts to the left of the straddle");
+  send(S[0], { t: "end" });
+  for (let i = 0; i < 40 && !S[0].ended; i++) {
+    const hh = S[0].view.hand;
+    if (hh && hh.phase === "betting" && hh.actor !== null) { const who = S[hh.actor / 2]; send(who, { t: "action", seq: hh.actionSeq, action: { type: "fold" } }); }
+    await wait(300);
+  }
+  assert(S[0].ended && S[0].ended.reduce((x, r) => x + r.net, 0) === 0, "straddle session nets sum to zero");
+  S.forEach((p) => p.ws.close());
+}
+
 // ----- dealer's choice and running it twice -----
 {
   const r3 = await fetch(`${BASE}/api/tables`, { method: "POST", headers: { "content-type": "application/json", cookie: a.cookie }, body: JSON.stringify({ name: "Smoke DC", config: { variant: "nlhe", smallBlind: 1, bigBlind: 2, startingStack: 200, actionTimerMs: 8000, maxRuns: 3, dealersChoice: "hand" } }) });

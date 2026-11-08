@@ -670,3 +670,53 @@ describe("seating", () => {
     expect(seatPlayer(g, 3, "u", "U", 100).seats[3]?.playerId).toBe("u");
   });
 });
+
+describe("straddle", () => {
+  // baseConfig: blinds 5/10, button at seat 0 -> sb 1, bb 2, utg 3
+  it("under the gun posts 2x the big blind, action starts to their left, and they get the option", () => {
+    const r = startHand(table([1000, 1000, 1000, 1000]), fixedRng(0), { straddleSeats: [3] });
+    let s = r.state;
+    expect(r.events).toContainEqual({ type: "blind", seat: 3, kind: "straddle", amount: 20 });
+    expect(s.hand!.currentBet).toBe(20);
+    expect(s.hand!.actor).toBe(0);
+    expect(getLimits(s, 0).minRaiseTo).toBe(40);
+    s = act(s, 0, "call").state;
+    s = act(s, 1, "call").state;
+    s = act(s, 2, "call").state;
+    expect(s.hand!.actor).toBe(3); // the straddler's option
+    const lim = getLimits(s, 3);
+    expect(lim.canCheck).toBe(true);
+    expect(lim.canRaise).toBe(true);
+    s = act(s, 3, "check").state;
+    expect(s.hand!.street).toBe("flop");
+    expect(s.hand!.players.reduce((a, p) => a + p.totalBet, 0)).toBe(80);
+  });
+
+  it("a raise over the straddle must be at least another straddle, and the straddler can re-raise", () => {
+    let s = startHand(table([1000, 1000, 1000, 1000]), fixedRng(0), { straddleSeats: [3] }).state;
+    expect(() => act(s, 0, "raise", 30)).toThrow(/Minimum is 40/);
+    s = act(s, 0, "raise", 40).state;
+    s = act(s, 1, "fold").state;
+    s = act(s, 2, "fold").state;
+    expect(s.hand!.actor).toBe(3);
+    expect(getLimits(s, 3).minRaiseTo).toBe(60);
+  });
+
+  it("three-handed the button straddles and the small blind acts first", () => {
+    const s = startHand(table([1000, 1000, 1000]), fixedRng(0), { straddleSeats: [0] }).state;
+    expect(s.hand!.currentBet).toBe(20);
+    expect(s.hand!.actor).toBe(1);
+  });
+
+  it("is skipped heads-up, when the table disallows it, when not asked for, or when the stack is too short", () => {
+    const heads = startHand(table([1000, 1000]), fixedRng(0), { straddleSeats: [0, 1] });
+    expect(heads.events.some((e) => e.type === "blind" && e.kind === "straddle")).toBe(false);
+    const off = startHand(table([1000, 1000, 1000, 1000], { straddle: false }), fixedRng(0), { straddleSeats: [3] });
+    expect(off.state.hand!.currentBet).toBe(10);
+    const other = startHand(table([1000, 1000, 1000, 1000]), fixedRng(0), { straddleSeats: [0, 1, 2] });
+    expect(other.state.hand!.currentBet).toBe(10);
+    const short = startHand(table([1000, 1000, 1000, 20]), fixedRng(0), { straddleSeats: [3] });
+    expect(short.state.hand!.currentBet).toBe(10);
+    expect(short.state.hand!.actor).toBe(3);
+  });
+});

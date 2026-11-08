@@ -73,6 +73,8 @@ interface Meta {
   endPending: boolean;
   /** Hand numbers whose rabbit hunt was revealed (replays show the rabbit only for these, or when unlocked). */
   rabbitShownHands: number[];
+  /** Players (userIds) who straddle whenever they are under the gun. */
+  straddlers: string[];
   /** Seats that chose to show their cards after the current hand ended. */
   shown: { hand: number; seats: number[] };
 }
@@ -194,7 +196,7 @@ export class TableDO extends DurableObject<Env> {
           votes: m.votes ?? {}, rabbitShown: m.rabbitShown ?? null, pendingConfig: m.pendingConfig ?? null, autoSatOut: m.autoSatOut ?? [],
           flags: normalizeFlags(m.flags), ghostVote: m.ghostVote ?? null, lastTaunt: m.lastTaunt ?? {},
           gameChoice: m.gameChoice ?? null, gameChosenFor: m.gameChosenFor ?? 0, orbitLeft: m.orbitLeft ?? 0, firstButton: m.firstButton ?? null,
-          lastActions: m.lastActions ?? {}, endPending: m.endPending ?? false, rabbitShownHands: m.rabbitShownHands ?? [], shown: m.shown ?? { hand: 0, seats: [] },
+          lastActions: m.lastActions ?? {}, endPending: m.endPending ?? false, rabbitShownHands: m.rabbitShownHands ?? [], shown: m.shown ?? { hand: 0, seats: [] }, straddlers: m.straddlers ?? [],
         } as Meta;
       }
       if (r.key === "game") {
@@ -242,7 +244,7 @@ export class TableDO extends DurableObject<Env> {
       createdAt: Date.now(), timer: null, rebuyRequests: [], departed: [], logSeq: 0, chatSeq: 0, leaving: [],
       pendingConfig: null, autoSatOut: [], options: defaultOptions(), hud: {}, cur: null, unlocked: [], votes: {}, rabbitShown: null,
       flags: args.flags ? normalizeFlags(args.flags) : defaultFlags(),
-      ghostVote: null, lastTaunt: {}, gameChoice: null, gameChosenFor: 0, orbitLeft: 0, firstButton: null, lastActions: {}, endPending: false, rabbitShownHands: [], shown: { hand: 0, seats: [] },
+      ghostVote: null, lastTaunt: {}, gameChoice: null, gameChosenFor: 0, orbitLeft: 0, firstButton: null, lastActions: {}, endPending: false, rabbitShownHands: [], shown: { hand: 0, seats: [] }, straddlers: [],
     };
     this.game = createGame(validateConfig(args.config));
     this.log("system", `Table created by ${args.hostName}.`);
@@ -504,6 +506,18 @@ export class TableDO extends DurableObject<Env> {
         return;
       }
 
+      case "straddle": {
+        requireFlag(meta.flags.straddle);
+        if (!this.seatOf(att.userId)) throw new EngineError("not_seated", "Take a seat first");
+        const on = msg.on === true;
+        const had = meta.straddlers.includes(att.userId);
+        if (on === had) return;
+        meta.straddlers = on ? [...meta.straddlers, att.userId] : meta.straddlers.filter((x) => x !== att.userId);
+        this.log("system", on ? `${att.name} will straddle when under the gun.` : `${att.name} stops straddling.`);
+        this.afterChange();
+        return;
+      }
+
       case "show": {
         // Show your own cards once the hand is over (e.g. after everyone folded to you, or after you folded).
         requireFlag(meta.flags.showCards);
@@ -631,6 +645,7 @@ export class TableDO extends DurableObject<Env> {
         if (merged.variant !== g.config.variant) changes.push(`game → ${VARIANTS[merged.variant].name}`);
         if (merged.smallBlind !== g.config.smallBlind || merged.bigBlind !== g.config.bigBlind) changes.push(`blinds → ${merged.smallBlind}/${merged.bigBlind}`);
         if (merged.ante !== g.config.ante) changes.push(`ante → ${merged.ante}`);
+        if (merged.straddle !== g.config.straddle) changes.push(merged.straddle ? "straddles allowed" : "no straddles");
         if (merged.maxRuns !== g.config.maxRuns) changes.push(merged.maxRuns === 1 ? "run it once only" : `run it up to ${merged.maxRuns === 2 ? "twice" : "three times"}`);
         if (merged.dealersChoice !== g.config.dealersChoice) changes.push(merged.dealersChoice === "off" ? "dealer's choice off" : `dealer's choice each ${merged.dealersChoice}`);
         if (!meta.flags.dealersChoice && merged.dealersChoice !== "off") throw new EngineError("disabled", "Dealer's choice is switched off right now");
@@ -800,7 +815,10 @@ export class TableDO extends DurableObject<Env> {
     if (this.openGameChoice()) return;
     let res;
     try {
-      res = startHand(g, undefined, { allowGhost: meta.flags.ghost, allowRuns: meta.flags.runItTwice, firstButton: meta.firstButton ?? undefined });
+      const straddleSeats = meta.flags.straddle
+        ? g.seats.flatMap((st) => (st && meta.straddlers.includes(st.playerId) ? [st.seat] : []))
+        : [];
+      res = startHand(g, undefined, { allowGhost: meta.flags.ghost, allowRuns: meta.flags.runItTwice, firstButton: meta.firstButton ?? undefined, straddleSeats });
     } catch (e) {
       if (e instanceof EngineError && e.code === "deck_short") {
         this.slog("warn", "hand.skip", { reason: "deck_short", message: e.message, seats: this.seatsSnapshot(), config: g.config, ghost: g.ghost });
@@ -897,6 +915,7 @@ export class TableDO extends DurableObject<Env> {
     if (meta.cur) meta.cur.events.push(...events);
     for (const e of events) {
       if (e.type === "handStarted" || e.type === "street") meta.lastActions = {};
+      else if (e.type === "blind" && e.kind === "straddle") meta.lastActions[e.seat] = { type: "straddle", amount: e.amount };
       else if (e.type === "action" && e.action !== "fold" && e.action !== "discard") {
         meta.lastActions[e.seat] = { type: e.allIn ? "allin" : e.action, amount: e.amount };
       }
@@ -1318,7 +1337,7 @@ export class TableDO extends DurableObject<Env> {
         } : null,
       },
       rebuyRequests: userId === meta.hostId ? meta.rebuyRequests : meta.rebuyRequests.filter((r) => r.playerId === userId),
-      me: { userId, seat: mySeat?.seat ?? null, limits, isHost: userId === meta.hostId },
+      me: { userId, seat: mySeat?.seat ?? null, limits, isHost: userId === meta.hostId, straddle: meta.straddlers.includes(userId) },
       serverTime: Date.now(),
     };
   }
@@ -1399,7 +1418,7 @@ export class TableDO extends DurableObject<Env> {
           this.log("system", `— Hand #${e.handNumber} · ${VARIANTS[e.variant].short} · ${name(e.button)} has the button —`);
           break;
         case "blind":
-          this.log("action", `${name(e.seat)} posts ${e.kind === "sb" ? "small blind" : e.kind === "bb" ? "big blind" : "ante"} ${e.amount}`);
+          this.log("action", e.kind === "straddle" ? `${name(e.seat)} straddles ${e.amount}` : `${name(e.seat)} posts ${e.kind === "sb" ? "small blind" : e.kind === "bb" ? "big blind" : "ante"} ${e.amount}`);
           break;
         case "action": {
           const verb = e.action === "fold" ? "folds" : e.action === "check" ? "checks" : e.action === "call" ? `calls ${e.amount}` : e.action === "bet" ? `bets ${e.amount}` : `raises to ${e.amount}`;

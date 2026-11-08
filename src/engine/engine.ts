@@ -156,6 +156,8 @@ export interface StartOptions {
   allowRuns?: boolean;
   /** First hand only: the seat to give the button (drawn earlier, e.g. so that player can pick the game). */
   firstButton?: number;
+  /** Seats that want to straddle when they are under the gun (needs `config.straddle` and 3+ players). */
+  straddleSeats?: number[];
 }
 
 export function startHand(state: GameState, rng: Rng = cryptoRng, opts: StartOptions = {}): StepResult {
@@ -227,6 +229,19 @@ export function startHand(state: GameState, rng: Rng = cryptoRng, opts: StartOpt
   }
   hand.currentBet = s.config.bigBlind;
   hand.minRaise = s.config.bigBlind;
+  // straddle: under the gun posts 2x the big blind blind; preflop action then starts to their left and they act last
+  let lastBlind: HandPlayer = bb;
+  if (s.config.straddle && players.length >= 3 && opts.straddleSeats?.length) {
+    const utg = nextPlayer(hand, bb.seat, () => true)!;
+    const amount = s.config.bigBlind * 2;
+    if (utg.seat !== sb.seat && opts.straddleSeats.includes(utg.seat) && s.seats[utg.seat]!.stack > amount) {
+      const amt = commit(hand, utg, s.seats[utg.seat]!, amount);
+      events.push({ type: "blind", seat: utg.seat, kind: "straddle", amount: amt });
+      hand.currentBet = amount;
+      hand.minRaise = amount;
+      lastBlind = utg;
+    }
+  }
 
   // deal
   for (let c = 0; c < spec.holeCards; c++) {
@@ -245,8 +260,8 @@ export function startHand(state: GameState, rng: Rng = cryptoRng, opts: StartOpt
   }
   for (const seat of parts) seat.handsPlayed += 1;
 
-  // first to act: left of BB
-  const first = nextPlayer(hand, bb.seat, canAct);
+  // first to act: left of the big blind (or of the straddle)
+  const first = nextPlayer(hand, lastBlind.seat, canAct);
   if (!first || players.filter(canAct).length < 2 && roundSettled(hand)) {
     // everyone (or all but one) is all-in from the blinds
     hand.actor = null;

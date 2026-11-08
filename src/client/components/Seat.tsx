@@ -102,6 +102,7 @@ function actionLabel(a: SeatAction) {
     case "bet": return `Bet ${fmtChips(a.amount)}`;
     case "raise": return `Raise ${fmtChips(a.amount)}`;
     case "allin": return "All-in";
+    case "straddle": return `Straddle ${fmtChips(a.amount)}`;
   }
 }
 

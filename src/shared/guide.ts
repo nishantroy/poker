@@ -87,6 +87,15 @@ export const HOUSE_RULES: HouseRule[] = [
     ],
   },
   {
+    id: "straddle",
+    title: "Straddle",
+    body: [
+      "With 3 or more players, the player to the left of the big blind can post a straddle of 2× the big blind before the cards are dealt.",
+      "Preflop action then starts to the straddler's left, and the straddler acts last with the option to raise. The smallest raise is to double the straddle.",
+      "Turn it on in your menu (\"Straddle under the gun\"). It applies every time you're in that seat until you turn it off.",
+    ],
+  },
+  {
     id: "dealers",
     title: "Dealer's choice",
     body: [

@@ -65,6 +65,10 @@ export function PlayerMenu({ open, onClose, view, send }: { open: boolean; onClo
             ) : (
               <button className="btn w-full" onClick={() => act({ t: "sitOut" })}>Sit out next hand</button>
             )}
+            {view.flags.straddle && view.config.straddle && (
+              <Toggle label="Straddle under the gun" hint={`Whenever you're first to act after the big blind, post ${view.config.bigBlind * 2} (2× the big blind) before the deal. You act last preflop. Needs 3+ players.`}
+                checked={view.me.straddle} onChange={(on) => send({ t: "straddle", on })} />
+            )}
             <div className="card-surface p-3 space-y-2">
               <p className="font-semibold text-sm">Rebuy / top-up {view.me.isHost ? "" : <span className="text-muted font-normal">(needs host approval)</span>}</p>
               {pending ? (
@@ -203,6 +207,7 @@ export function HostPanel({ open, onClose, view, send }: { open: boolean; onClos
           </div>
           {view.flags.squid && <BoardsPicker boards={cfg.boards} squid={cfg.squid} onChange={(b, sq) => setCfg((c) => ({ ...c, boards: b, squid: sq }))} />}
           {view.flags.runItTwice && <RunsPicker value={cfg.maxRuns} onChange={(n) => set("maxRuns", n)} />}
+          {view.flags.straddle && <Toggle label="Allow straddles" hint="Under the gun may post 2× the big blind before the deal and act last preflop." checked={cfg.straddle} onChange={(v) => set("straddle", v)} />}
           {view.flags.dealersChoice && view.flags.variants && <DealersChoicePicker value={cfg.dealersChoice} onChange={(v) => set("dealersChoice", v)} />}
           <button className="btn btn-primary w-full" disabled={!dirty} onClick={() => send({ t: "config", patch: cfg })}>Apply settings</button>
         </section>

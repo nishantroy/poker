@@ -9,7 +9,7 @@ import { useAuth } from "../lib/auth";
 import { Link, navigate } from "../lib/router";
 import { fmtNet, timeAgo } from "../lib/format";
 import { Field, Sheet, Toast } from "../components/ui";
-import { BoardsPicker, RunsPicker } from "../components/Panels";
+import { BoardsPicker, RunsPicker, Toggle } from "../components/Panels";
 import { GAME_GUIDE } from "@shared/guide";
 import { DealersChoicePicker } from "../components/Guide";
 import { FeedbackSheet } from "../components/Feedback";
@@ -218,6 +218,7 @@ function CreateSheet({ open, onClose }: { open: boolean; onClose: () => void }) 
         </div>
         {flags.squid && <BoardsPicker boards={cfg.boards} squid={cfg.squid} onChange={(b, sq) => setCfg((c) => ({ ...c, boards: b, squid: sq }))} />}
         {flags.runItTwice && <RunsPicker value={cfg.maxRuns} onChange={(n) => set("maxRuns", n)} />}
+        {flags.straddle && <Toggle label="Allow straddles" hint="Under the gun may post 2× the big blind before the deal and act last preflop." checked={cfg.straddle} onChange={(v) => set("straddle", v)} />}
         {flags.dealersChoice && flags.variants && <DealersChoicePicker value={cfg.dealersChoice} onChange={(v) => set("dealersChoice", v)} />}
         {err && <p className="text-sm text-[#ff8b8e]" role="alert">{err}</p>}
         <button className="btn btn-primary w-full" disabled={busy}>{busy ? "Creating…" : "Open table"}</button>

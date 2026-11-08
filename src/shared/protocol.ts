@@ -72,7 +72,7 @@ export interface PublicSeat {
 }
 
 export interface SeatAction {
-  type: "check" | "call" | "bet" | "raise" | "allin";
+  type: "check" | "call" | "bet" | "raise" | "allin" | "straddle";
   /** Chips: amount called, or the street bet after a bet/raise. */
   amount: number;
 }
@@ -172,6 +172,8 @@ export interface TableView {
     seat: number | null;
     limits: ActionLimits | null;
     isHost: boolean;
+    /** I straddle whenever I'm under the gun (3+ players, table allows it). */
+    straddle: boolean;
   };
   serverTime: number;
 }
@@ -228,6 +230,7 @@ export type ClientMessage =
   | { t: "runs"; runs: number }
   | { t: "chooseGame"; variant: Variant }
   | { t: "show" }
+  | { t: "straddle"; on: boolean }
   | { t: "ping" };
 
 // ----- server -> client -----
@@ -329,7 +332,7 @@ export const LIMITS = {
 } as const;
 
 export function defaultConfig(): TableConfig {
-  return { variant: "nlhe", smallBlind: 1, bigBlind: 2, ante: 0, startingStack: 200, maxSeats: 8, actionTimerMs: 30_000, boards: 1, squid: false, maxRuns: 3, dealersChoice: "off" };
+  return { variant: "nlhe", smallBlind: 1, bigBlind: 2, ante: 0, startingStack: 200, maxSeats: 8, actionTimerMs: 30_000, boards: 1, squid: false, maxRuns: 3, dealersChoice: "off", straddle: true };
 }
 
 export function validateConfig(input: unknown): TableConfig {
@@ -351,6 +354,7 @@ export function validateConfig(input: unknown): TableConfig {
     squid: typeof o.squid === "boolean" ? o.squid : d.squid,
     maxRuns: int(o.maxRuns, 1, 3, d.maxRuns),
     dealersChoice: o.dealersChoice === "hand" || o.dealersChoice === "orbit" ? o.dealersChoice : "off",
+    straddle: typeof o.straddle === "boolean" ? o.straddle : d.straddle,
   };
   if (cfg.boards === 1) cfg.squid = false;
   if (cfg.bigBlind < cfg.smallBlind) cfg.bigBlind = cfg.smallBlind;

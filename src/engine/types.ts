@@ -34,6 +34,8 @@ export interface TableConfig {
   maxRuns: number;
   /** Dealer's choice: the player about to get the button picks the game, every hand or for one orbit. */
   dealersChoice: DealersChoice;
+  /** Allow the under-the-gun player to straddle (a voluntary third blind of 2× the big blind) with 3+ players. */
+  straddle: boolean;
 }
 
 export type DealersChoice = "off" | "hand" | "orbit";
@@ -179,7 +181,7 @@ export interface Action {
 
 export type GameEvent =
   | { type: "handStarted"; handNumber: number; variant: Variant; button: number; players: number[] }
-  | { type: "blind"; seat: number; kind: "sb" | "bb" | "ante"; amount: number }
+  | { type: "blind"; seat: number; kind: "sb" | "bb" | "ante" | "straddle"; amount: number }
   | { type: "action"; seat: number; action: ActionType; amount: number; allIn: boolean }
   | { type: "discarded"; seat: number }
   | { type: "street"; street: Street; boards: Card[][] }

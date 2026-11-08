@@ -8,7 +8,7 @@ const VARIANT_IDS = Object.keys(VARIANTS) as Variant[];
 
 /** Which house rules to explain, given the operator flags. */
 function houseRulesFor(flags: Flags) {
-  const on: Record<string, boolean> = { runs: flags.runItTwice, dealers: flags.dealersChoice, ghost: flags.ghost, squid: flags.squid, rabbit: flags.rabbitHunt };
+  const on: Record<string, boolean> = { straddle: flags.straddle, runs: flags.runItTwice, dealers: flags.dealersChoice, ghost: flags.ghost, squid: flags.squid, rabbit: flags.rabbitHunt };
   return HOUSE_RULES.filter((r) => on[r.id] !== false);
 }
 
