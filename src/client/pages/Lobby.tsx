@@ -9,7 +9,9 @@ import { useAuth } from "../lib/auth";
 import { Link, navigate } from "../lib/router";
 import { fmtNet, timeAgo } from "../lib/format";
 import { Field, Sheet, Toast } from "../components/ui";
-import { BoardsPicker } from "../components/Panels";
+import { BoardsPicker, RunsPicker } from "../components/Panels";
+import { GAME_GUIDE } from "@shared/guide";
+import { DealersChoicePicker } from "../components/Guide";
 import { Logo } from "./Login";
 
 export function LobbyPage() {
@@ -193,7 +195,7 @@ function CreateSheet({ open, onClose }: { open: boolean; onClose: () => void }) 
         <div>
           <span className="label">Game</span>
           <VariantPicker value={cfg.variant} onChange={(v) => set("variant", v)} allowAll={flags.variants} />
-          <p className="text-xs text-dim mt-1.5">{VARIANTS[cfg.variant].name} · {VARIANTS[cfg.variant].holeCards} hole cards · {VARIANTS[cfg.variant].limit}</p>
+          <p className="text-xs text-dim mt-1.5">{VARIANTS[cfg.variant].name} · {GAME_GUIDE[cfg.variant].tagline}</p>
         </div>
         <div className="grid grid-cols-3 gap-3">
           <Field label="Small blind"><input className="input" type="number" inputMode="numeric" min={1} value={cfg.smallBlind} onChange={num("smallBlind")} /></Field>
@@ -206,6 +208,8 @@ function CreateSheet({ open, onClose }: { open: boolean; onClose: () => void }) 
           <Field label="Timer (s)"><input className="input" type="number" inputMode="numeric" min={5} max={300} value={Math.round(cfg.actionTimerMs / 1000)} onChange={(e) => set("actionTimerMs", Number(e.target.value) * 1000)} /></Field>
         </div>
         {flags.squid && <BoardsPicker boards={cfg.boards} squid={cfg.squid} onChange={(b, sq) => setCfg((c) => ({ ...c, boards: b, squid: sq }))} />}
+        {flags.runItTwice && <RunsPicker value={cfg.maxRuns} onChange={(n) => set("maxRuns", n)} />}
+        {flags.dealersChoice && flags.variants && <DealersChoicePicker value={cfg.dealersChoice} onChange={(v) => set("dealersChoice", v)} />}
         {err && <p className="text-sm text-[#ff8b8e]" role="alert">{err}</p>}
         <button className="btn btn-primary w-full" disabled={busy}>{busy ? "Creating…" : "Open table"}</button>
       </form>

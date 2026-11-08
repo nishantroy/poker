@@ -30,8 +30,12 @@ Open <http://127.0.0.1:8003> in two browsers (or a private window) to play again
 
 ```bash
 npx wrangler login
-npm run deploy     # = npm run build && wrangler deploy
+npm run deploy        # refuses while a game is in play on production
+npm run deploy:wait   # waits (up to 2 h) for games to finish, then deploys
+npm run deploy:force  # emergency fix: skips the check
 ```
+
+**No deploys mid-game.** `scripts/deploy-guard.mjs` asks production's `/api/status` how many games are in play. A game counts as in play when a hand is live, or when a session is running or paused with someone connected and activity in the last 20 minutes. The GitHub deploy job runs the same guard with `--wait` for up to 5 hours. To push an urgent fix anyway, run the "CI & Deploy" workflow by hand with **force** ticked, or deploy locally with `npm run deploy:force`. A forced deploy is still safe for the game state: every action is saved before it is acknowledged, and clients reconnect on their own. The risk is a rules change landing between two streets of the same hand.
 
 The first deploy creates the two Durable Object classes via the `v1` migration in `wrangler.jsonc` (`new_sqlite_classes`, as required on the free plan). State lives in Durable Object storage, so stats persist across redeploys.
 
@@ -49,6 +53,9 @@ The first deploy creates the two Durable Object classes via the `v1` migration i
 - **Ghost player** (vote-in, majority of seated players): a ghost is dealt into every hand but never bets. It always sees showdown and can only win there, and only the main pot. When it wins, its whole stack rides into the next hand's main pot as dead money (shown as a separate 👻 pot; it never changes pot-limit bet sizing). When a player beats it, its stack resets to 0 and that player takes the dead money too. The ghost can only be voted off while its stack is 0. The ghost shows its cards at the end of every hand.
 - **Multiple boards / Squid Game 🦑** (host setting, 1–3 boards): every pot is split equally between boards. With Squid Game on, when the river is dealt the board with the lowest river card is eliminated before river betting (ties: turn, then flop cards last to first, then river suit). Works with every variant as long as the deck has enough cards; the engine deals fewer boards (or refuses to start) when it does not.
 - **Bad beat splash 💔**: at showdown the engine enumerates the river for every loser. A loser who was at least 80% to win with one card to come gets a full-screen "You got rivered" moment for everyone (the ghost can be the victim too) and the next hand waits a little longer.
+- **Running it twice** (host setting "Run it up to", default 3): when the betting is over with cards to come, everyone still in the hand picks once, twice or three times within 12 seconds. The lowest pick wins and a missing pick counts as once. Each run becomes its own board that shares the cards already dealt, and every pot splits equally between runs (odd chips to the first run). Not offered on multi-board hands or while a Pineapple discard is still to come.
+- **Dealer's choice** (host setting: off, each hand, each orbit): before the deal, the player about to get the button picks the game from those that fit the table. An orbit lasts one hand per player at the table. No pick in 20 seconds keeps the current game.
+- **How to play**: tap the game badge at the top of the table for rules of every game plus the house rules in force. The rules text lives in `src/shared/guide.ts`.
 - **Taunts**: a smiley button sends one of 12 canned taunts as a speech bubble over your seat for a few seconds (one every 6 seconds).
 - **Sounds**: synthesised chips, cards, all-in, win, Squid elimination, ghost entrance and bad-beat womp via WebAudio; mute per device with the bell.
 

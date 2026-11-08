@@ -75,7 +75,7 @@ export interface PublicPot {
 }
 
 export interface TimerInfo {
-  kind: "action" | "discard" | "runout" | "nextHand";
+  kind: "action" | "discard" | "runChoice" | "chooseGame" | "runout" | "nextHand";
   at: number; // epoch ms
   durationMs: number;
 }
@@ -105,6 +105,10 @@ export interface PublicHand {
   rabbit: Card[][] | null;
   /** A rabbit hunt is possible for this hand (ended early, option on, not yet revealed). */
   rabbitAvailable: boolean;
+  /** Times the board is being run; when > 1 each entry in `boards` is one run. */
+  runs: number;
+  /** Open "run it twice" vote. Picks stay private; `decided` lists who has picked. */
+  runChoice: { max: number; pending: number[]; decided: number[]; mine: number | null } | null;
 }
 
 export interface PublicGhost {
@@ -151,6 +155,8 @@ export interface TableView {
   /** Operator feature flags in force at this table. */
   flags: Flags;
   ghost: GhostInfo;
+  /** Dealer's choice state; null when the table does not play dealer's choice. */
+  dealerChoice: DealerChoiceInfo | null;
   me: {
     userId: string;
     seat: number | null;
@@ -209,6 +215,8 @@ export type ClientMessage =
   | { t: "vote"; number: number }
   | { t: "ghostVote"; on: boolean }
   | { t: "taunt"; id: number }
+  | { t: "runs"; runs: number }
+  | { t: "chooseGame"; variant: Variant }
   | { t: "ping" };
 
 // ----- server -> client -----
@@ -310,7 +318,7 @@ export const LIMITS = {
 } as const;
 
 export function defaultConfig(): TableConfig {
-  return { variant: "nlhe", smallBlind: 1, bigBlind: 2, ante: 0, startingStack: 200, maxSeats: 8, actionTimerMs: 30_000, boards: 1, squid: false };
+  return { variant: "nlhe", smallBlind: 1, bigBlind: 2, ante: 0, startingStack: 200, maxSeats: 8, actionTimerMs: 30_000, boards: 1, squid: false, maxRuns: 3, dealersChoice: "off" };
 }
 
 export function validateConfig(input: unknown): TableConfig {
@@ -330,9 +338,19 @@ export function validateConfig(input: unknown): TableConfig {
     actionTimerMs: int(o.actionTimerMs, 5_000, 300_000, d.actionTimerMs),
     boards: int(o.boards, 1, 3, d.boards),
     squid: typeof o.squid === "boolean" ? o.squid : d.squid,
+    maxRuns: int(o.maxRuns, 1, 3, d.maxRuns),
+    dealersChoice: o.dealersChoice === "hand" || o.dealersChoice === "orbit" ? o.dealersChoice : "off",
   };
   if (cfg.boards === 1) cfg.squid = false;
   if (cfg.bigBlind < cfg.smallBlind) cfg.bigBlind = cfg.smallBlind;
   if (cfg.startingStack < cfg.bigBlind) cfg.startingStack = cfg.bigBlind;
   return cfg;
+}
+
+export interface DealerChoiceInfo {
+  mode: "hand" | "orbit";
+  /** Open pick: the dealer's seat and the games that fit. */
+  picking: { chooser: number; options: Variant[] } | null;
+  /** Orbit mode: hands left before the next pick. */
+  handsLeft: number | null;
 }

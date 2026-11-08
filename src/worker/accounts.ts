@@ -179,6 +179,13 @@ export class AccountsDO extends DurableObject<Env> {
     return out;
   }
 
+  /** Tables that may still be in play (not ended, touched in the last 3 days). */
+  openTableCodes(limit = 50): string[] {
+    return this.sql.exec<{ code: string }>(
+      "SELECT code FROM tables WHERE status != 'ended' AND updated_at > ? ORDER BY updated_at DESC LIMIT ?", Date.now() - 3 * 24 * 60 * 60 * 1000, limit,
+    ).toArray().map((r) => r.code);
+  }
+
   /** Flip one flag and push the new set to every table that is still open. */
   async setFlag(name: FlagName, enabled: boolean, byUserId: string): Promise<Flags> {
     this.sql.exec(

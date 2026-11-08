@@ -73,6 +73,7 @@ for (let i = 0; i < 20 && A.view.hand && A.view.hand.phase !== "showdown"; i++) 
   const h = A.view.hand;
   const me = h.actor === 0 ? A : h.actor === 3 ? B2 : null;
   if (me && h.phase === "betting") send(me, { t: "action", seq: h.actionSeq, action: { type: me.view.me.limits.canRaise ? "allin" : "call" } });
+  if (h.phase === "runChoice") for (const [c, seat] of [[A, 0], [B2, 3]]) if (h.runChoice.pending.includes(seat)) send(c, { t: "runs", runs: 1 });
   await wait(350);
 }
 await wait(3000); // run-out alarms
@@ -250,6 +251,48 @@ assert(A.errors.every((e) => e.code === "disabled" || e.code === "taunt_cooldown
   assert(C.view.hand?.number === 2, "next hand deals itself when the player returns, no Start needed");
   assert(C.errors.length === 0 && D.errors.length === 0, "auto-deal section had no socket errors");
   C.ws.close(); D.ws.close();
+}
+
+// ----- dealer's choice and running it twice -----
+{
+  const r3 = await fetch(`${BASE}/api/tables`, { method: "POST", headers: { "content-type": "application/json", cookie: a.cookie }, body: JSON.stringify({ name: "Smoke DC", config: { variant: "nlhe", smallBlind: 1, bigBlind: 2, startingStack: 200, actionTimerMs: 8000, maxRuns: 3, dealersChoice: "hand" } }) });
+  const code3 = (await r3.json()).code;
+  const E = await connect(a, code3), F = await connect(b, code3);
+  send(E, { t: "sit", seat: 0, buyIn: 200 }); send(F, { t: "sit", seat: 1, buyIn: 200 });
+  await wait(300); send(E, { t: "start" }); await wait(500);
+  const pick = E.view.dealerChoice?.picking;
+  assert(pick && E.view.hand === null && pick.options.includes("plo"), "dealer's choice: the first dealer is asked to pick before the deal");
+  const dealer = pick.chooser === 0 ? E : F, other = dealer === E ? F : E;
+  send(other, { t: "chooseGame", variant: "plo" });
+  await wait(300);
+  assert(other.errors.some((e) => e.code === "not_dealer"), "only the dealer can pick the game");
+  send(dealer, { t: "chooseGame", variant: "plo" });
+  await wait(500);
+  assert(E.view.hand?.number === 1 && E.view.hand.variant === "plo" && E.view.hand.button === pick.chooser, "picked game is dealt and the picker has the button");
+  // both all-in preflop, then agree to run it twice
+  for (let i = 0; i < 6 && E.view.hand.phase === "betting"; i++) {
+    const h = E.view.hand; const c = h.actor === 0 ? E : F;
+    send(c, { t: "action", seq: h.actionSeq, action: { type: c.view.me.limits.canRaise ? "allin" : "call" } });
+    await wait(300);
+  }
+  assert(E.view.hand.phase === "runChoice" && E.view.hand.runChoice.max === 3, "all-in opens the run-it-twice vote");
+  send(E, { t: "runs", runs: 2 }); await wait(200);
+  assert(F.view.hand.runChoice.decided.includes(0) && F.view.hand.runChoice.mine === null, "votes stay private until everyone picks");
+  send(F, { t: "runs", runs: 3 }); await wait(300);
+  assert(E.view.hand.runs === 2 && E.view.hand.boards.length === 2, "lowest pick wins: running it twice on two boards");
+  for (let i = 0; i < 20 && E.view.hand.phase !== "showdown"; i++) await wait(500);
+  assert(E.view.hand.phase === "showdown" && E.view.hand.boards.every((b) => b.length === 5), "both runs dealt to the river");
+  assert(E.view.seats.filter(Boolean).reduce((x, s) => x + s.stack, 0) === 400, "chips conserved after running it twice");
+  if (E.view.seats.every((s) => !s || s.stack > 0)) {
+    for (let i = 0; i < 20 && !E.view.dealerChoice?.picking; i++) await wait(500);
+    const p2 = E.view.dealerChoice?.picking;
+    assert(p2 && p2.chooser !== pick.chooser, "next hand: the new dealer picks");
+    send(p2.chooser === 0 ? E : F, { t: "chooseGame", variant: "nlhe" });
+    await wait(500);
+    assert(E.view.hand?.number === 2 && E.view.hand.variant === "nlhe", "second pick switches the game back");
+  } else console.log("skip second pick (a player busted)");
+  assert(E.errors.filter((e) => e.code !== "not_dealer").length === 0 && F.errors.filter((e) => e.code !== "not_dealer").length === 0, "dealer's choice section had no unexpected socket errors");
+  E.ws.close(); F.ws.close();
 }
 A.ws.close(); B2.ws.close();
 console.log("\nSMOKE PASSED");

@@ -16,10 +16,16 @@ See the root `/Users/nishantroy/code/AGENTS.md` for shared conventions (ports, w
 
 ## House games
 - Ghost player, multi-board/Squid Game and bad beats live in the engine (`src/engine/engine.ts`: `startHand` options, `dealNextStreet`, `squidLoser`, `showdown`, `detectBadBeat`). The ghost is `GHOST_SEAT = -1` in results/events and never occupies a table seat. `hand.boards` is always an array; board 0 is the only board for normal games.
+- Running it twice is engine-level: `offerRuns` opens the `runChoice` phase, `chooseRuns`/`timeout` resolve it, and several runs become several entries in `hand.boards` (so showdown's equal split per board pays each run). `hand.runs > 1` means the boards are runs, not a multi-board game: no Squid elimination.
+- Dealer's choice is TableDO-only (`openGameChoice`/`finishGameChoice`, `chooseGame` message, `chooseGame` timer). The engine helps with `nextButtonSeat` and `StartOptions.firstButton`.
+- Game and house-rule explanations live in `src/shared/guide.ts`; update them with any rules change.
 - Taunts and ghost votes are TableDO-only (`taunt`, `ghostVote` messages). Everything new is flag-gated; see `src/shared/flags.ts`.
 
 ## Validation
 - `npm run check` (types), `npm test` (engine), `npm run smoke` (needs `npm run dev` running).
+
+## Deploying
+- Use `npm run deploy`. It runs `scripts/deploy-guard.mjs` first and refuses while a game is in play on production (`/api/status`). Never use `deploy:force` or `wrangler deploy` directly unless the user explicitly asks for an emergency deploy.
 
 ## Debugging (logs)
 - Workers Logs is on (`observability` in `wrangler.jsonc`). Every server log line is one JSON object from `slog()` in `src/worker/slog.ts`: `evt`, `level`, and for table events `table` (code), `hand`, `phase`, `status`.

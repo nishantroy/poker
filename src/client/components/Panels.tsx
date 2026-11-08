@@ -4,6 +4,8 @@ import type { ChatMessage, ClientMessage, HandRecordView, HandSummary, LogLine, 
 import type { Flags } from "@shared/flags";
 import { TAUNTS } from "@shared/protocol";
 import { HandsList, ReplayView } from "./Replay";
+import { GAME_GUIDE } from "@shared/guide";
+import { DealersChoicePicker } from "./Guide";
 import { VARIANTS } from "@engine/variants";
 import { fmtChips, fmtNet } from "../lib/format";
 import { navigate } from "../lib/router";
@@ -109,6 +111,23 @@ function GhostVote({ view, send }: { view: TableView; send: (m: ClientMessage) =
   );
 }
 
+/** Most times an all-in board may be run. */
+export function RunsPicker({ value, onChange }: { value: number; onChange: (n: number) => void }) {
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center gap-2">
+        <span className="label mb-0">Run it up to</span>
+        <div className="flex gap-1.5" role="group" aria-label="Most runs when all-in">
+          {[["1", "Once"], ["2", "Twice"], ["3", "3×"]].map(([n, l]) => (
+            <button type="button" key={n} className="chip-toggle min-w-[56px]" aria-pressed={value === Number(n)} onClick={() => onChange(Number(n))}>{l}</button>
+          ))}
+        </div>
+      </div>
+      <p className="text-xs text-dim">When players are all-in, everyone in the hand picks how many times to run the rest of the board. The lowest pick wins.</p>
+    </div>
+  );
+}
+
 /** 1 / 2 / 3 boards plus the Squid Game elimination toggle. */
 export function BoardsPicker({ boards, squid, onChange }: { boards: number; squid: boolean; onChange: (boards: number, squid: boolean) => void }) {
   return (
@@ -166,7 +185,7 @@ export function HostPanel({ open, onClose, view, send }: { open: boolean; onClos
         <section className="space-y-3">
           <h3 className="label">Game settings <span className="normal-case font-normal text-dim">(apply from the next hand)</span></h3>
           <VariantPicker value={cfg.variant} onChange={(v) => set("variant", v)} allowAll={view.flags.variants} />
-          <p className="text-xs text-dim">{VARIANTS[cfg.variant].name}</p>
+          <p className="text-xs text-dim">{VARIANTS[cfg.variant].name} · {GAME_GUIDE[cfg.variant].tagline}</p>
           <div className="grid grid-cols-3 gap-2">
             <Field label="Small"><input className="input" type="number" inputMode="numeric" min={1} value={cfg.smallBlind} onChange={num("smallBlind")} /></Field>
             <Field label="Big"><input className="input" type="number" inputMode="numeric" min={1} value={cfg.bigBlind} onChange={num("bigBlind")} /></Field>
@@ -177,6 +196,8 @@ export function HostPanel({ open, onClose, view, send }: { open: boolean; onClos
             <Field label="Timer (s)"><input className="input" type="number" inputMode="numeric" min={5} max={300} value={Math.round(cfg.actionTimerMs / 1000)} onChange={(e) => set("actionTimerMs", Number(e.target.value) * 1000)} /></Field>
           </div>
           {view.flags.squid && <BoardsPicker boards={cfg.boards} squid={cfg.squid} onChange={(b, sq) => setCfg((c) => ({ ...c, boards: b, squid: sq }))} />}
+          {view.flags.runItTwice && <RunsPicker value={cfg.maxRuns} onChange={(n) => set("maxRuns", n)} />}
+          {view.flags.dealersChoice && view.flags.variants && <DealersChoicePicker value={cfg.dealersChoice} onChange={(v) => set("dealersChoice", v)} />}
           <button className="btn btn-primary w-full" disabled={!dirty} onClick={() => send({ t: "config", patch: cfg })}>Apply settings</button>
         </section>
 

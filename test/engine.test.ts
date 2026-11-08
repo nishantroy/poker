@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { advance, applyAction, canStartHand, computePots, forfeit, getLimits, startHand, timeout, EngineError, setGhost, squidLoser, GHOST_SEAT } from "@engine/index";
+import { advance, applyAction, canStartHand, chooseRuns, computePots, forfeit, getLimits, startHand, timeout, EngineError, setGhost, squidLoser, GHOST_SEAT } from "@engine/index";
 import { table, startRigged, act, stacks, awards, fixedRng } from "./helpers";
 
 describe("hand setup", () => {
@@ -519,6 +519,142 @@ describe("chip conservation with ghost and boards", () => {
         expect(s.seats.reduce((a, x) => a + (x?.stack ?? 0), 0) + s.ghost.stack).toBe(total);
         if (s.hand!.ghost) expect(s.hand!.ghost.hole.length).toBeLessThanOrEqual(cfg.variant === "crazy-pineapple" ? 2 : 4);
       }
+    }
+  });
+});
+
+describe("run it twice", () => {
+  // sb (seat1) AA, bb (seat2) 22, button (seat0) 77; same rigged cards as the two-board test
+  const deal = "Ah 2h 7c As 2s 7d  2c Kd 9h Qs Jd 5c  3d 4h  8s Tc";
+  const allInPreflop = (cfg = {}) => {
+    let s = startRigged(table([1000, 1000, 1000], { maxRuns: 3, ...cfg }), 0, deal).state;
+    s = act(s, 0, "fold").state;
+    s = act(s, 1, "allin").state;
+    return act(s, 2, "allin");
+  };
+
+  it("opens a vote when all-in with cards to come, and runs twice when both agree", () => {
+    const step = allInPreflop();
+    let s = step.state;
+    expect(s.hand!.phase).toBe("runChoice");
+    expect(s.hand!.runChoice).toEqual({ max: 3, pending: [1, 2], choices: {} });
+    expect(step.events.some((e) => e.type === "runChoiceOpened")).toBe(true);
+    s = chooseRuns(s, 1, 2).state;
+    expect(s.hand!.phase).toBe("runChoice");
+    const r = chooseRuns(s, 2, 3); // lowest pick wins
+    s = r.state;
+    expect(r.events).toContainEqual({ type: "runsChosen", runs: 2 });
+    expect(s.hand!.phase).toBe("runout");
+    expect(s.hand!.runs).toBe(2);
+    expect(s.hand!.boards).toEqual([[], []]);
+    for (let i = 0; i < 3; i++) s = advance(s).state;
+    const done = advance(s).state;
+    const res = done.hand!.result!;
+    // run 1 (2c Kd 9h 3d 8s): set of deuces; run 2 (Qs Jd 5c 4h Tc): aces. 1000 each.
+    expect(res.pots[0]!.winners.map((w) => [w.board, w.seat, w.amount])).toEqual([[0, 2, 1000], [1, 1, 1000]]);
+    expect(stacks(done)).toEqual([1000, 1000, 1000]);
+    expect(done.hand!.result!.badBeat).toBeNull();
+  });
+
+  it("any player picking once means once", () => {
+    let s = allInPreflop().state;
+    s = chooseRuns(s, 1, 3).state;
+    s = chooseRuns(s, 2, 1).state;
+    expect(s.hand!.runs).toBe(1);
+    expect(s.hand!.boards).toHaveLength(1);
+  });
+
+  it("a timed-out vote runs it once", () => {
+    let s = allInPreflop().state;
+    s = chooseRuns(s, 1, 2).state;
+    const r = timeout(s);
+    expect(r.state.hand!.runs).toBe(1);
+    expect(r.state.hand!.phase).toBe("runout");
+  });
+
+  it("rejects bad picks", () => {
+    const s = allInPreflop().state;
+    expect(() => chooseRuns(s, 0, 2)).toThrow(EngineError); // folded, not pending
+    expect(() => chooseRuns(s, 1, 4)).toThrow(/between 1 and 3/);
+    const s2 = chooseRuns(s, 1, 2).state;
+    expect(() => chooseRuns(s2, 1, 2)).toThrow(/already picked/);
+  });
+
+  it("runs on the flop share the flop and deal separate turns and rivers", () => {
+    let s = startRigged(table([1000, 1000, 1000], { maxRuns: 2 }), 0, deal).state;
+    s = act(s, 0, "fold").state;
+    s = act(s, 1, "call").state;
+    s = act(s, 2, "check").state; // flop dealt
+    const flop = [...s.hand!.boards[0]!];
+    s = act(s, 1, "allin").state;
+    s = act(s, 2, "call").state;
+    expect(s.hand!.phase).toBe("runChoice");
+    expect(s.hand!.runChoice!.max).toBe(2);
+    s = chooseRuns(s, 1, 2).state;
+    s = chooseRuns(s, 2, 2).state;
+    expect(s.hand!.boards).toEqual([flop, flop]);
+    s = advance(s).state; // turn
+    s = advance(s).state; // river
+    const [b0, b1] = s.hand!.boards;
+    expect(b0!.slice(0, 3)).toEqual(b1!.slice(0, 3));
+    expect(b0!.length).toBe(5);
+    expect(new Set([...b0!.slice(3), ...b1!.slice(3)]).size).toBe(4);
+    const done = advance(s).state;
+    expect(done.hand!.phase).toBe("showdown");
+    expect(stacks(done).reduce((a, b) => a + b, 0)).toBe(3000);
+  });
+
+  it("is not offered when the table, the flag, multi-board or a pending discard rule it out", () => {
+    expect(allInPreflop({ maxRuns: 1 }).state.hand!.phase).toBe("runout");
+    expect(allInPreflop({ boards: 2 }).state.hand!.phase).toBe("runout");
+    let s = startHand(table([1000, 1000, 1000], { maxRuns: 3 }), fixedRng(0), { allowRuns: false }).state;
+    s = act(s, 0, "fold").state; s = act(s, 1, "allin").state;
+    expect(act(s, 2, "allin").state.hand!.phase).toBe("runout");
+    // crazy pineapple: the discard after the flop is still to come
+    let c = startRigged(table([1000, 1000, 1000], { maxRuns: 3, variant: "crazy-pineapple" }), 0).state;
+    c = act(c, 0, "fold").state; c = act(c, 1, "allin").state;
+    expect(act(c, 2, "allin").state.hand!.phase).toBe("runout");
+  });
+
+  it("a player leaving mid-vote drops out of the vote", () => {
+    let s = startRigged(table([1000, 1000, 1000], { maxRuns: 2 }), 0, deal).state;
+    s = act(s, 0, "allin").state;
+    s = act(s, 1, "allin").state;
+    s = act(s, 2, "allin").state;
+    expect(s.hand!.runChoice!.pending).toEqual([0, 1, 2]);
+    s = chooseRuns(s, 1, 2).state;
+    s = chooseRuns(s, 2, 2).state;
+    s = forfeit(s, 0).state;
+    expect(s.hand!.runs).toBe(2);
+    expect(s.hand!.phase).toBe("runout");
+  });
+
+  it("random play with random run picks never creates or destroys chips", () => {
+    let seed = 5;
+    const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+    for (const variant of ["nlhe", "plo", "pineapple"] as const) {
+      let s = setGhost(table([400, 1000, 50, 300], { variant, maxRuns: 3 }), true);
+      let ran = 0;
+      for (let hand = 0; hand < 60 && canStartHand(s); hand++) {
+        s = startHand(s, (n) => Math.floor(rnd() * n)).state;
+        let guard = 0;
+        while (s.hand!.phase !== "showdown" && guard++ < 500) {
+          const h = s.hand!;
+          if (h.phase === "runChoice") { s = chooseRuns(s, h.runChoice!.pending[0]!, 1 + Math.floor(rnd() * h.runChoice!.max)).state; continue; }
+          if (h.phase === "runout") { s = advance(s).state; continue; }
+          if (h.phase === "discard") { s = timeout(s).state; continue; }
+          const seat = h.actor!;
+          const lim = getLimits(s, seat);
+          const x = rnd();
+          if (x < 0.1) s = act(s, seat, "fold").state;
+          else if (x < 0.5) s = act(s, seat, lim.canCheck ? "check" : "call").state;
+          else s = act(s, seat, "allin").state;
+        }
+        if (s.hand!.runs > 1) ran++;
+        expect(s.hand!.phase).toBe("showdown");
+        expect(s.seats.reduce((a, x) => a + (x?.stack ?? 0), 0) + s.ghost.stack).toBe(1750);
+      }
+      expect(ran).toBeGreaterThan(0);
     }
   });
 });

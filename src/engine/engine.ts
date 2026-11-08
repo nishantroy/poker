@@ -75,6 +75,14 @@ export function canStartHand(state: GameState): boolean {
   return (!state.hand || state.hand.phase === "showdown") && participants(state).length >= 2;
 }
 
+/** Seat that gets the button on the next deal, or null for the first hand (drawn at random when it is dealt). */
+export function nextButtonSeat(state: GameState): number | null {
+  if (state.button < 0 || state.handCount === 0) return null;
+  const seats = participants(state).map((p) => p.seat);
+  if (seats.length === 0) return null;
+  return seats.find((x) => x > state.button) ?? seats[0]!;
+}
+
 export function isHandLive(state: GameState): boolean {
   return !!state.hand && state.hand.phase !== "showdown";
 }
@@ -144,6 +152,10 @@ function commit(hand: Hand, p: HandPlayer, seatRef: Seat, amount: number, counts
 export interface StartOptions {
   /** Set false to keep the ghost out of this hand even if enabled (its chips stay put). */
   allowGhost?: boolean;
+  /** Set false to never offer running it more than once this hand. */
+  allowRuns?: boolean;
+  /** First hand only: the seat to give the button (drawn earlier, e.g. so that player can pick the game). */
+  firstButton?: number;
 }
 
 export function startHand(state: GameState, rng: Rng = cryptoRng, opts: StartOptions = {}): StepResult {
@@ -171,12 +183,8 @@ export function startHand(state: GameState, rng: Rng = cryptoRng, opts: StartOpt
 
   // move button
   const partSeats = parts.map((p) => p.seat);
-  if (s.button < 0 || s.handCount === 0) {
-    s.button = partSeats[rng(partSeats.length)]!;
-  } else {
-    const next = partSeats.find((x) => x > s.button) ?? partSeats[0]!;
-    s.button = next;
-  }
+  const drawn = opts.firstButton !== undefined && partSeats.includes(opts.firstButton) ? opts.firstButton : null;
+  s.button = nextButtonSeat(s) ?? drawn ?? partSeats[rng(partSeats.length)]!;
   s.handCount += 1;
 
   const deck = shuffledDeck(rng);
@@ -189,6 +197,7 @@ export function startHand(state: GameState, rng: Rng = cryptoRng, opts: StartOpt
     ghost: null, players, button: s.button,
     smallBlindSeat: -1, bigBlindSeat: -1, street: "preflop", phase: "betting", actor: null,
     currentBet: 0, minRaise: s.config.bigBlind, lastAggressor: null, pendingDiscard: [], result: null, actionSeq: 0,
+    runsAllowed: opts.allowRuns === false ? 1 : Math.max(1, Math.min(3, s.config.maxRuns ?? 1)), runs: 1, runChoice: null,
   };
   s.hand = hand;
 
@@ -373,6 +382,14 @@ export function timeout(state: GameState): StepResult {
     res.events.unshift({ type: "timeout", seat });
     return res;
   }
+  if (hand.phase === "runChoice") {
+    const s = structuredClone(state);
+    const h = s.hand!;
+    const events: GameEvent[] = [];
+    h.actionSeq += 1;
+    resolveRuns(h, events); // anyone who did not pick counts as "once"
+    return { state: s, events };
+  }
   if (hand.phase === "discard") {
     const s = structuredClone(state);
     const h = s.hand!;
@@ -388,6 +405,22 @@ export function timeout(state: GameState): StepResult {
     return { state: s, events };
   }
   throw new EngineError("no_timer", "Nothing to time out");
+}
+
+/** A player in an all-in hand picks how many times to run the board. The lowest pick wins once everyone has picked. */
+export function chooseRuns(state: GameState, seat: number, runs: number): StepResult {
+  const s = structuredClone(state);
+  const hand = s.hand;
+  if (!hand || hand.phase !== "runChoice" || !hand.runChoice) throw new EngineError("no_run_choice", "Not choosing runs right now");
+  const rc = hand.runChoice;
+  if (!rc.pending.includes(seat)) throw new EngineError("not_pending", "You have already picked");
+  if (!Number.isInteger(runs) || runs < 1 || runs > rc.max) throw new EngineError("bad_runs", `Pick between 1 and ${rc.max}`);
+  rc.choices[seat] = runs;
+  rc.pending = rc.pending.filter((x) => x !== seat);
+  hand.actionSeq += 1;
+  const events: GameEvent[] = [];
+  if (rc.pending.length === 0) resolveRuns(hand, events);
+  return { state: s, events };
 }
 
 /** Called by the host runtime after a pause while in the `runout` phase: deals the next street. */
@@ -436,6 +469,10 @@ export function forfeit(state: GameState, seat: number): StepResult {
     endOfStreet(s, hand, events);
   } else if (hand.phase === "runout" && hand.street === "river") {
     showdown(s, hand, events);
+  } else if (hand.phase === "runChoice" && hand.runChoice) {
+    hand.runChoice.pending = hand.runChoice.pending.filter((x) => x !== seat);
+    delete hand.runChoice.choices[seat];
+    if (hand.runChoice.pending.length === 0) resolveRuns(hand, events);
   }
   return { state: s, events };
 }
@@ -510,6 +547,7 @@ function afterDiscard(s: GameState, hand: Hand, events: GameEvent[]) {
   if (actors.length < 2) {
     hand.phase = "runout";
     revealAll(hand);
+    offerRuns(hand, events);
     return;
   }
   hand.phase = "betting";
@@ -582,6 +620,7 @@ function enterRunoutOrShowdown(s: GameState, hand: Hand, events: GameEvent[]) {
     hand.actor = null;
     revealAll(hand);
     if (hand.street === "river") showdown(s, hand, events);
+    else offerRuns(hand, events);
     return;
   }
   hand.phase = "betting";
@@ -598,7 +637,39 @@ function dealNextStreet(s: GameState, hand: Hand, events: GameEvent[]) {
   for (const board of hand.boards) for (let k = 0; k < n; k++) board.push(hand.deck.pop()!);
   resetStreet(hand, s.config.bigBlind);
   events.push({ type: "street", street: next, boards: hand.boards.map((b) => [...b]) });
-  if (next === "river" && s.config.squid && hand.boards.length > 1) eliminateBoard(hand, events);
+  if (next === "river" && s.config.squid && hand.boards.length > 1 && hand.runs === 1) eliminateBoard(hand, events);
+}
+
+/**
+ * All-in with cards still to come: open a "how many runs" vote when the table allows it.
+ * Not offered on multi-board hands, or while a Pineapple discard is still to come.
+ */
+function offerRuns(hand: Hand, events: GameEvent[]) {
+  if ((hand.runsAllowed ?? 1) < 2 || hand.boards.length !== 1 || hand.street === "river") return;
+  const spec = VARIANTS[hand.variant];
+  if (spec.discardAfter && STREET_ORDER.indexOf(hand.street) < STREET_ORDER.indexOf(spec.discardAfter)) return;
+  const missing = 5 - hand.boards[0]!.length;
+  const max = Math.min(hand.runsAllowed, Math.floor(hand.deck.length / missing));
+  const live = nonFolded(hand);
+  if (max < 2 || live.length < 2) return;
+  hand.phase = "runChoice";
+  hand.runChoice = { max, pending: live.map((p) => p.seat), choices: {} };
+  events.push({ type: "runChoiceOpened", max });
+}
+
+/** Close the vote: the lowest pick wins (a missing pick counts as once). Several runs become several boards. */
+function resolveRuns(hand: Hand, events: GameEvent[]) {
+  const rc = hand.runChoice;
+  let runs = rc ? rc.max : 1;
+  if (rc) {
+    for (const p of nonFolded(hand)) runs = Math.min(runs, rc.choices[p.seat] ?? 1);
+  }
+  runs = Math.max(1, runs);
+  hand.runChoice = null;
+  hand.runs = runs;
+  if (runs > 1) hand.boards = Array.from({ length: runs }, () => [...hand.boards[0]!]);
+  hand.phase = "runout";
+  events.push({ type: "runsChosen", runs });
 }
 
 /** Squid Game: the board with the lowest river card goes out. Ties: turn, then flop cards last to first, then river suit. */

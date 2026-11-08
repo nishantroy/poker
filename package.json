@@ -10,7 +10,9 @@
     "check": "tsc -p tsconfig.worker.json --noEmit && tsc -p tsconfig.client.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "deploy": "npm run build && wrangler deploy",
+    "deploy": "node scripts/deploy-guard.mjs && npm run build && wrangler deploy",
+    "deploy:wait": "node scripts/deploy-guard.mjs --wait && npm run build && wrangler deploy",
+    "deploy:force": "npm run build && wrangler deploy",
     "types": "wrangler types",
     "smoke": "node scripts/smoke.mjs"
   },

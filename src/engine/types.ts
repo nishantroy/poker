@@ -30,7 +30,13 @@ export interface TableConfig {
   boards: number;
   /** Squid Game: with several boards, the board with the lowest river card is eliminated before river betting. */
   squid: boolean;
+  /** Most times an all-in board may be run (1 = never more than once). Players pick up to this; the lowest pick wins. */
+  maxRuns: number;
+  /** Dealer's choice: the player about to get the button picks the game, every hand or for one orbit. */
+  dealersChoice: DealersChoice;
 }
+
+export type DealersChoice = "off" | "hand" | "orbit";
 
 /** Seat number used for the ghost in results and events. The ghost never occupies a table seat. */
 export const GHOST_SEAT = -1;
@@ -54,6 +60,7 @@ export type Street = "preflop" | "flop" | "turn" | "river";
 export type Phase =
   | "betting" // waiting on `actor`
   | "discard" // waiting on everyone in `pendingDiscard`
+  | "runChoice" // all-in with cards to come: players in the hand pick how many times to run it
   | "runout" // all-in: deal the next street after a short pause
   | "showdown" // hand over; results populated
   ;
@@ -137,6 +144,20 @@ export interface Hand {
   result: HandResult | null;
   /** Monotonic counter incremented per action; the DO uses it to validate timer alarms. */
   actionSeq: number;
+  /** Most runs allowed this hand (from config and the runtime flag, fixed at the deal). */
+  runsAllowed: number;
+  /** How many times the board is being run. When > 1, `boards` holds one board per run. */
+  runs: number;
+  /** Open "run it twice" vote: choices are private until everyone has picked. */
+  runChoice: RunChoice | null;
+}
+
+export interface RunChoice {
+  max: number;
+  /** Seats still to pick. */
+  pending: number[];
+  /** Seat → runs picked. */
+  choices: Record<number, number>;
 }
 
 export interface GameState {
@@ -169,6 +190,8 @@ export type GameEvent =
   | { type: "potAwarded"; seat: number; amount: number; handName?: string; potIndex: number; board?: number }
   | { type: "badBeat"; victim: number; winner: number; equity: number }
   | { type: "returned"; seat: number; amount: number }
+  | { type: "runChoiceOpened"; max: number }
+  | { type: "runsChosen"; runs: number }
   | { type: "handEnded"; handNumber: number }
   | { type: "timeout"; seat: number };
 

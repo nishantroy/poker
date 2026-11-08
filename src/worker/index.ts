@@ -71,6 +71,22 @@ async function handleApi(req: Request, env: Env, path: string): Promise<Response
       const ctx = await context(req, env);
       return json({ user: ctx.user, isAdmin: ctx.isAdmin, flags: ctx.flags });
     }
+    if (path === "/api/status" && method === "GET") {
+      // Deploy guard: counts only (no table codes). A table is "in play" when a hand is live, or when the
+      // session is running/paused with someone connected and activity in the last 20 minutes.
+      const codes = await acc.openTableCodes();
+      const now = Date.now();
+      const rows = await Promise.all(codes.map(async (code) => {
+        try { return await env.TABLE.get(env.TABLE.idFromName(code)).liveness(); } catch { return null; }
+      }));
+      let handsLive = 0, sessionsLive = 0;
+      for (const r of rows) {
+        if (!r) continue;
+        if (r.handLive) handsLive++;
+        if (r.handLive || ((r.status === "running" || r.status === "paused") && r.sockets > 0 && now - r.lastActivityAt < 20 * 60_000)) sessionsLive++;
+      }
+      return json({ ok: true, checkedAt: now, tables: codes.length, sessionsLive, handsLive }, { headers: { "cache-control": "no-store" } });
+    }
     if (path === "/api/flags" && method === "GET") {
       return json({ flags: await acc.flags() });
     }

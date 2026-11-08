@@ -101,3 +101,26 @@ export function DiscardBar({ selected, count, onDiscard }: { selected: number | 
     </div>
   );
 }
+
+const RUN_LABEL = ["", "Once", "Twice", "3 times"];
+
+/** All-in vote: how many times to run the rest of the board. */
+export function RunChoiceBar({ max, pendingCount, onPick }: { max: number; pendingCount: number; onPick: (runs: number) => void }) {
+  return (
+    <div className="card-surface p-3 anim-fade-up">
+      <p className="text-sm mb-2">
+        <span className="font-bold">Run it more than once?</span>{" "}
+        <span className="text-muted">The lowest pick wins. {pendingCount > 1 ? `${pendingCount} players` : "1 player"} still to pick.</span>
+      </p>
+      <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${max}, minmax(0, 1fr))` }}>
+        {Array.from({ length: max }, (_, i) => i + 1).map((n) => (
+          <button key={n} className={`btn ${n === 1 ? "" : "btn-primary"}`} onClick={() => onPick(n)}>{RUN_LABEL[n]}</button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export function runsLabel(n: number) {
+  return n === 2 ? "twice" : n === 3 ? "three times" : "once";
+}

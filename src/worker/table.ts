@@ -1,8 +1,8 @@
 import { DurableObject } from "cloudflare:workers";
 import {
-  EngineError, GHOST_SEAT, VARIANTS, advance, applyAction, canStartHand, computePots, createGame, forfeit, getLimits, isHandLive,
+  EngineError, GHOST_SEAT, VARIANTS, advance, applyAction, boardsThatFit, canStartHand, chooseRuns, cryptoRng, nextButtonSeat, computePots, createGame, forfeit, getLimits, isHandLive,
   participants, rabbitBoards, removePlayer, seatPlayer, setGhost, startHand, timeout,
-  type GameEvent, type GameState, type TableConfig,
+  type GameEvent, type GameState, type TableConfig, type Variant,
 } from "@engine/index";
 import { addHud, emptyHud, hudFromHand, type HandRecord, type HudCounters } from "@engine/hud";
 import type {
@@ -59,6 +59,14 @@ interface Meta {
   ghostVote: { on: boolean; voters: string[] } | null;
   /** last taunt per userId (cooldown) */
   lastTaunt: Record<string, number>;
+  /** Dealer's choice: the open pick, if any. */
+  gameChoice: { chooser: number; chooserId: string; options: Variant[] } | null;
+  /** Dealer's choice: hand number the current pick was made for (skip asking again). */
+  gameChosenFor: number;
+  /** Dealer's choice per orbit: hands left before the next pick. */
+  orbitLeft: number;
+  /** First hand only: button drawn early so that player can pick the game. */
+  firstButton: number | null;
 }
 
 interface Attachment {
@@ -70,6 +78,8 @@ const RUNOUT_PAUSE_MS = 1400;
 const NEXT_HAND_DELAY_MS = 3500;
 const NEXT_HAND_DELAY_SHOWDOWN_MS = 6000;
 const DISCARD_TIMER_MS = 20_000;
+const RUN_CHOICE_MS = 12_000;
+const GAME_CHOICE_MS = 20_000;
 const BAD_BEAT_EXTRA_MS = 3000;
 
 const SCHEMA = `
@@ -110,6 +120,15 @@ export class TableDO extends DurableObject<Env> {
     return (this.game?.seats ?? []).flatMap((s) => (s ? [{ seat: s.seat, name: s.name, stack: s.stack, status: s.status, disc: s.disconnected }] : []));
   }
 
+  /** Is a game being played here right now? Used by the deploy guard (`/api/status`). */
+  async liveness(): Promise<{ handLive: boolean; status: TableStatus; sockets: number; lastActivityAt: number }> {
+    const g = this.game;
+    const meta = this.meta;
+    if (!g || !meta) return { handLive: false, status: "ended", sockets: 0, lastActivityAt: 0 };
+    const last = this.sql.exec<{ ts: number | null }>("SELECT MAX(ts) AS ts FROM log").toArray()[0]?.ts ?? 0;
+    return { handLive: isHandLive(g) || !!meta.gameChoice, status: meta.status, sockets: this.ctx.getWebSockets().length, lastActivityAt: last };
+  }
+
   /** Admin debug snapshot: full server state with live hole cards and the deck hidden. */
   async debugSnapshot(): Promise<unknown> {
     if (!this.meta || !this.game) return null;
@@ -140,6 +159,7 @@ export class TableDO extends DurableObject<Env> {
           ...m, options: { ...defaultOptions(), ...(m.options ?? {}) }, hud: m.hud ?? {}, cur: m.cur ?? null, unlocked: m.unlocked ?? [],
           votes: m.votes ?? {}, rabbitShown: m.rabbitShown ?? null, pendingConfig: m.pendingConfig ?? null, autoSatOut: m.autoSatOut ?? [],
           flags: normalizeFlags(m.flags), ghostVote: m.ghostVote ?? null, lastTaunt: m.lastTaunt ?? {},
+          gameChoice: m.gameChoice ?? null, gameChosenFor: m.gameChosenFor ?? 0, orbitLeft: m.orbitLeft ?? 0, firstButton: m.firstButton ?? null,
         } as Meta;
       }
       if (r.key === "game") {
@@ -151,6 +171,9 @@ export class TableDO extends DurableObject<Env> {
           g.hand.boards ??= [g.hand.board ?? []];
           g.hand.eliminated ??= null;
           g.hand.ghost ??= null;
+          g.hand.runs ??= 1;
+          g.hand.runsAllowed ??= 1;
+          g.hand.runChoice ??= null;
           if (g.hand.result) {
             g.hand.result.boardHands ??= [];
             g.hand.result.ghost ??= null;
@@ -184,7 +207,7 @@ export class TableDO extends DurableObject<Env> {
       createdAt: Date.now(), timer: null, rebuyRequests: [], departed: [], logSeq: 0, chatSeq: 0, leaving: [],
       pendingConfig: null, autoSatOut: [], options: defaultOptions(), hud: {}, cur: null, unlocked: [], votes: {}, rabbitShown: null,
       flags: args.flags ? normalizeFlags(args.flags) : defaultFlags(),
-      ghostVote: null, lastTaunt: {},
+      ghostVote: null, lastTaunt: {}, gameChoice: null, gameChosenFor: 0, orbitLeft: 0, firstButton: null,
     };
     this.game = createGame(validateConfig(args.config));
     this.log("system", `Table created by ${args.hostName}.`);
@@ -413,6 +436,27 @@ export class TableDO extends DurableObject<Env> {
         return;
       }
 
+      case "chooseGame": {
+        const g = this.game!;
+        const choice = meta.gameChoice;
+        if (!choice) throw new EngineError("no_choice", "Nobody is picking a game right now");
+        if (choice.chooserId !== att.userId) throw new EngineError("not_dealer", "Only the dealer picks the game");
+        if (!choice.options.includes(msg.variant)) throw new EngineError("bad_game", "That game does not fit this table right now");
+        this.finishGameChoice(msg.variant, "picked");
+        if (meta.status === "running" && !isHandLive(g)) this.beginHand();
+        else this.afterChange();
+        return;
+      }
+
+      case "runs": {
+        const g = this.game!;
+        const seat = this.seatOf(att.userId);
+        if (!seat) throw new EngineError("not_seated", "You are not seated");
+        const res = chooseRuns(g, seat.seat, Math.floor(Number(msg.runs)));
+        this.applyStep(res.state, res.events);
+        return;
+      }
+
       case "action": {
         const g = this.game!;
         const seat = this.seatOf(att.userId);
@@ -508,6 +552,9 @@ export class TableDO extends DurableObject<Env> {
         if (merged.variant !== g.config.variant) changes.push(`game → ${VARIANTS[merged.variant].name}`);
         if (merged.smallBlind !== g.config.smallBlind || merged.bigBlind !== g.config.bigBlind) changes.push(`blinds → ${merged.smallBlind}/${merged.bigBlind}`);
         if (merged.ante !== g.config.ante) changes.push(`ante → ${merged.ante}`);
+        if (merged.maxRuns !== g.config.maxRuns) changes.push(merged.maxRuns === 1 ? "run it once only" : `run it up to ${merged.maxRuns === 2 ? "twice" : "three times"}`);
+        if (merged.dealersChoice !== g.config.dealersChoice) changes.push(merged.dealersChoice === "off" ? "dealer's choice off" : `dealer's choice each ${merged.dealersChoice}`);
+        if (!meta.flags.dealersChoice && merged.dealersChoice !== "off") throw new EngineError("disabled", "Dealer's choice is switched off right now");
         if (merged.actionTimerMs !== g.config.actionTimerMs) changes.push(`timer → ${Math.round(merged.actionTimerMs / 1000)}s`);
         if (merged.startingStack !== g.config.startingStack) changes.push(`buy-in → ${merged.startingStack}`);
         if (isHandLive(g)) meta.pendingConfig = merged; // applied by beginHand so the live hand's rules never change
@@ -662,9 +709,10 @@ export class TableDO extends DurableObject<Env> {
       this.syncTableStatus();
       return;
     }
+    if (this.openGameChoice()) return;
     let res;
     try {
-      res = startHand(g, undefined, { allowGhost: meta.flags.ghost });
+      res = startHand(g, undefined, { allowGhost: meta.flags.ghost, allowRuns: meta.flags.runItTwice, firstButton: meta.firstButton ?? undefined });
     } catch (e) {
       if (e instanceof EngineError && e.code === "deck_short") {
         this.slog("warn", "hand.skip", { reason: "deck_short", message: e.message, seats: this.seatsSnapshot(), config: g.config, ghost: g.ghost });
@@ -677,11 +725,74 @@ export class TableDO extends DurableObject<Env> {
       throw e;
     }
     const nh = res.state.hand!;
+    meta.firstButton = null;
+    if (g.config.dealersChoice === "orbit" && meta.orbitLeft > 0) meta.orbitLeft -= 1;
     this.slog("info", "hand.start", {
       hand: nh.number, variant: nh.variant, boards: nh.boards.length, button: nh.button, sb: nh.smallBlindSeat, bb: nh.bigBlindSeat,
       players: nh.players.map((p) => p.seat), ghost: nh.ghost ? nh.ghost.stake : null, seats: this.seatsSnapshot(),
     });
     this.applyStep(res.state, res.events);
+  }
+
+  /** Dealer's choice is on for this table and switched on by the operator. */
+  private dealersChoiceOn() {
+    const meta = this.meta!;
+    return this.game!.config.dealersChoice !== "off" && meta.flags.dealersChoice && meta.flags.variants;
+  }
+
+  /** Games that fit everyone (plus the ghost) at the current table settings. */
+  private gameOptions(): Variant[] {
+    const g = this.game!;
+    const n = participants(g).length;
+    return (Object.keys(VARIANTS) as Variant[]).filter((v) => boardsThatFit({ ...g.config, variant: v }, n, false) > 0);
+  }
+
+  /**
+   * Dealer's choice: before dealing, ask the player about to get the button to pick the game.
+   * Returns true when a pick is now open (the deal waits for it, or for the timer).
+   */
+  private openGameChoice(): boolean {
+    const g = this.game!;
+    const meta = this.meta!;
+    const next = g.handCount + 1;
+    if (!this.dealersChoiceOn() || meta.gameChosenFor === next) return false;
+    if (g.config.dealersChoice === "orbit" && meta.orbitLeft > 0) return false;
+    let chooser = nextButtonSeat(g);
+    if (chooser === null) {
+      const seats = participants(g).map((p) => p.seat);
+      chooser = meta.firstButton !== null && seats.includes(meta.firstButton) ? meta.firstButton : seats[cryptoRng(seats.length)]!;
+      meta.firstButton = chooser;
+    }
+    const seat = g.seats[chooser];
+    const options = this.gameOptions();
+    if (!seat || seat.disconnected || options.length < 2) {
+      this.finishGameChoice(null, "skipped");
+      return false;
+    }
+    meta.gameChoice = { chooser, chooserId: seat.playerId, options };
+    this.log("system", `🎲 Dealer's choice: ${seat.name} picks the game${g.config.dealersChoice === "orbit" ? " for the next orbit" : ""}.`);
+    this.slog("info", "dealer.choiceOpen", { chooser, user: seat.name, options, mode: g.config.dealersChoice });
+    this.afterChange();
+    return true;
+  }
+
+  /** Close the pick: switch the game (or keep it), then deal. */
+  private finishGameChoice(variant: Variant | null, how: "picked" | "timeout" | "skipped") {
+    const g = this.game!;
+    const meta = this.meta!;
+    const chooser = meta.gameChoice ? g.seats[meta.gameChoice.chooser] : null;
+    meta.gameChoice = null;
+    meta.gameChosenFor = g.handCount + 1;
+    if (g.config.dealersChoice === "orbit") meta.orbitLeft = participants(g).length;
+    if (variant && variant !== g.config.variant) {
+      g.config = { ...g.config, variant };
+      void accounts(this.env).updateTable(meta.code, { variant });
+    }
+    const name = VARIANTS[g.config.variant].name;
+    const span = g.config.dealersChoice === "orbit" ? ` for ${meta.orbitLeft} hands` : "";
+    if (how === "picked") this.log("system", `🎲 ${chooser?.name ?? "The dealer"} picks ${name}${span}.`);
+    else if (how === "timeout") this.log("system", `🎲 No pick in time. ${name} it is${span}.`);
+    this.slog("info", "dealer.choiceDone", { how, variant: g.config.variant, orbitLeft: meta.orbitLeft });
   }
 
   /** Commit a new engine state, log events, schedule the next timer, persist, and broadcast. */
@@ -760,8 +871,12 @@ export class TableDO extends DurableObject<Env> {
       timer = { kind: "action", at: now + g.config.actionTimerMs, durationMs: g.config.actionTimerMs };
     } else if (h && h.phase === "discard") {
       timer = { kind: "discard", at: now + DISCARD_TIMER_MS, durationMs: DISCARD_TIMER_MS };
+    } else if (h && h.phase === "runChoice") {
+      timer = { kind: "runChoice", at: now + RUN_CHOICE_MS, durationMs: RUN_CHOICE_MS };
     } else if (h && h.phase === "runout") {
       timer = { kind: "runout", at: now + RUNOUT_PAUSE_MS, durationMs: RUNOUT_PAUSE_MS };
+    } else if (meta.gameChoice && meta.status === "running") {
+      timer = { kind: "chooseGame", at: now + GAME_CHOICE_MS, durationMs: GAME_CHOICE_MS };
     } else if ((!h || h.phase === "showdown") && meta.status === "running" && canStartHand(g)) {
       const contested = !!h?.result && Object.keys(h.result.hands).length > 0;
       const d = (contested ? NEXT_HAND_DELAY_SHOWDOWN_MS : NEXT_HAND_DELAY_MS) + (h?.result?.badBeat && meta.flags.badBeat ? BAD_BEAT_EXTRA_MS : 0);
@@ -770,7 +885,7 @@ export class TableDO extends DurableObject<Env> {
     // keep an existing timer of the same kind for the same action step (don't reset the clock on unrelated changes)
     const seq = h?.actionSeq ?? -1;
     const prevKey = meta.timerKey;
-    const key = timer ? `${timer.kind}:${h?.number ?? 0}:${seq}` : null;
+    const key = timer ? `${timer.kind}:${h?.number ?? 0}:${seq}:${meta.gameChosenFor}` : null;
     if (timer && prevKey === key && meta.timer && meta.timer.at > now) {
       return; // same step, timer already running
     }
@@ -796,6 +911,13 @@ export class TableDO extends DurableObject<Env> {
         const res = timeout(g);
         this.applyStep(res.state, res.events);
       } else if (kind === "discard" && h && h.phase === "discard") {
+        const res = timeout(g);
+        this.applyStep(res.state, res.events);
+      } else if (kind === "chooseGame" && meta.gameChoice && meta.status === "running") {
+        this.finishGameChoice(null, "timeout");
+        if (!isHandLive(g)) this.beginHand();
+        else this.afterChange();
+      } else if (kind === "runChoice" && h && h.phase === "runChoice") {
         const res = timeout(g);
         this.applyStep(res.state, res.events);
       } else if (kind === "runout" && h && h.phase === "runout") {
@@ -913,6 +1035,7 @@ export class TableDO extends DurableObject<Env> {
     }
     this.slog("info", "session.end", { seats: this.seatsSnapshot(), departed: meta.departed.length });
     meta.status = "ended";
+    meta.gameChoice = null;
     meta.timer = null;
     meta.timerKey = undefined;
     void this.ctx.storage.deleteAlarm();
@@ -971,7 +1094,7 @@ export class TableDO extends DurableObject<Env> {
     const meta = this.meta!;
     const h = g.hand;
     const mySeat = this.seatOf(userId);
-    const showAll = !!h && (h.phase === "showdown" || h.phase === "runout");
+    const showAll = !!h && (h.phase === "showdown" || h.phase === "runout" || h.phase === "runChoice");
 
     const seats: (PublicSeat | null)[] = g.seats.map((s) => {
       if (!s) return null;
@@ -1012,6 +1135,10 @@ export class TableDO extends DurableObject<Env> {
           pendingDiscard: [...h.pendingDiscard], result: h.result && !meta.flags.badBeat ? { ...h.result, badBeat: null } : h.result, actionSeq: h.actionSeq, button: h.button,
           smallBlindSeat: h.smallBlindSeat, bigBlindSeat: h.bigBlindSeat,
           rabbit: h.phase === "showdown" && meta.rabbitShown === h.number ? rabbitBoards(h) : null,
+          runs: h.runs ?? 1,
+          runChoice: h.runChoice
+            ? { max: h.runChoice.max, pending: [...h.runChoice.pending], decided: Object.keys(h.runChoice.choices).map(Number), mine: mySeat ? h.runChoice.choices[mySeat.seat] ?? null : null }
+            : null,
           rabbitAvailable: h.phase === "showdown" && h.boards[0]!.length < 5 && meta.flags.rabbitHunt && meta.options.rabbitHunt && meta.rabbitShown !== h.number && !!mySeat,
         }
       : null;
@@ -1019,6 +1146,13 @@ export class TableDO extends DurableObject<Env> {
     return {
       code: meta.code, name: meta.name, status: meta.status, hostId: meta.hostId, config: g.config, seats, button: g.button,
       handCount: g.handCount, hand, timer: meta.timer, options: meta.options, hud: meta.flags.hud ? meta.hud : {}, flags: meta.flags,
+      dealerChoice: this.dealersChoiceOn()
+        ? {
+            mode: g.config.dealersChoice as "hand" | "orbit",
+            picking: meta.gameChoice ? { chooser: meta.gameChoice.chooser, options: [...meta.gameChoice.options] } : null,
+            handsLeft: g.config.dealersChoice === "orbit" ? meta.orbitLeft : null,
+          }
+        : null,
       ghost: {
         enabled: g.ghost.enabled, stack: g.ghost.stack,
         vote: meta.ghostVote ? {
@@ -1098,7 +1232,8 @@ export class TableDO extends DurableObject<Env> {
 
   private logEvents(prev: GameState, state: GameState, events: GameEvent[]) {
     const name = (seat: number) => (seat === GHOST_SEAT ? "👻 Ghost" : state.seats[seat]?.name ?? prev.seats[seat]?.name ?? `Seat ${seat + 1}`);
-    const boardLabel = (b: number | undefined) => (b === undefined ? "" : ` on board ${b + 1}`);
+    const runs = state.hand?.runs ?? 1;
+    const boardLabel = (b: number | undefined) => (b === undefined ? "" : runs > 1 ? ` on run ${b + 1}` : ` on board ${b + 1}`);
     for (const e of events) {
       switch (e.type) {
         case "handStarted":
@@ -1141,6 +1276,12 @@ export class TableDO extends DurableObject<Env> {
           break;
         case "returned":
           this.log("result", `${e.amount} returned to ${name(e.seat)}`);
+          break;
+        case "runChoiceOpened":
+          this.log("system", `All in. Everyone in the hand picks how many times to run it (up to ${e.max}).`);
+          break;
+        case "runsChosen":
+          this.log("system", e.runs === 1 ? "Running it once." : `Running it ${e.runs === 2 ? "twice" : "three times"}. Each run plays for an equal share of every pot.`);
           break;
         case "handEnded":
           break;

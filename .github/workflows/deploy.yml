@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Deploy even if a game is in play"
+        type: boolean
+        default: false
 
 concurrency:
   group: deploy-${{ github.ref }}
@@ -32,7 +38,7 @@ jobs:
   deploy:
     name: Deploy to Cloudflare
     needs: check
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: production
     steps:
@@ -46,6 +52,12 @@ jobs:
         with:
           name: public
           path: public
+      # Never ship a new build while a game is in play: wait up to 5 hours for it to finish.
+      # Emergency fix: re-run this workflow with the "force" input, or deploy locally with `npm run deploy:force`.
+      - name: Wait until no game is in play
+        if: ${{ !inputs.force }}
+        run: node scripts/deploy-guard.mjs --wait --max-wait 300
+        timeout-minutes: 310
       - name: wrangler deploy
         uses: cloudflare/wrangler-action@v3
         with:
