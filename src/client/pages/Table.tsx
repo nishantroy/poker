@@ -10,7 +10,7 @@ import { useTable } from "../lib/socket";
 import { fmtChips } from "../lib/format";
 import { Link } from "../lib/router";
 import { PlayingCard } from "../components/Card";
-import { BetChip, SeatView } from "../components/Seat";
+import { BetChip, SeatView, warnMs } from "../components/Seat";
 import { ActionBar, DiscardBar, RunChoiceBar, runsLabel } from "../components/ActionBar";
 import { EndedModal, HostPanel, LogChat, PlayerMenu, SitSheet, TauntPopover, type SideTab } from "../components/Panels";
 import { HudStrip, PlayerSheet } from "../components/Hud";
@@ -182,19 +182,20 @@ export function TablePage({ code }: { code: string }) {
     }
   }, [turnKey, play]);
 
-  // your clock is running out: a tick each second for the last 5 seconds (double beep on the last one)
+  // your clock is running out: a tick each second from when the ring turns red (8s) (double beep on the last one)
   const myClock = myTurn && view!.timer?.kind === "action" ? view!.timer.at : null;
+  const myClockMs = myTurn && view!.timer?.kind === "action" ? view!.timer.durationMs : 0;
   useEffect(() => {
     if (myClock === null) return;
     const timers: ReturnType<typeof setTimeout>[] = [];
     const now = Date.now() + offset;
-    for (let sLeft = 5; sLeft >= 1; sLeft--) {
+    for (let sLeft = Math.floor(warnMs(myClockMs) / 1000); sLeft >= 1; sLeft--) {
       const at = myClock - sLeft * 1000 - now;
       if (at < 0) continue;
       timers.push(setTimeout(() => { play(sLeft === 1 ? "tickLast" : "tick"); if (sLeft <= 3) vibrate(30); }, at));
     }
     return () => timers.forEach(clearTimeout);
-  }, [myClock, offset, play]);
+  }, [myClock, myClockMs, offset, play]);
 
   // bad beat splash: show once per hand for a few seconds
   const badBeatKey = view?.hand?.result?.badBeat && flags.badBeat ? view.hand.number : null;

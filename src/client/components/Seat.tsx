@@ -3,12 +3,17 @@ import type { PublicSeat, SeatAction, TimerInfo } from "@shared/protocol";
 import { fmtChips, initials } from "../lib/format";
 import { PlayingCard } from "./Card";
 
+/** The last stretch of a player's clock: red ring and ticking. 8 seconds, or the whole clock when it is shorter. */
+export function warnMs(durationMs: number) {
+  return Math.min(8000, durationMs);
+}
+
 export function TimerRing({ timer, offset, size = 66 }: { timer: TimerInfo; offset: number; size?: number }) {
   const r = size / 2 - 3;
   const circ = 2 * Math.PI * r;
   const elapsed = Math.max(0, Date.now() + offset - (timer.at - timer.durationMs));
   const remaining = timer.durationMs - elapsed;
-  const urgent = remaining < Math.min(8000, timer.durationMs * 0.3);
+  const urgent = remaining < warnMs(timer.durationMs);
   return (
     <svg className="timer-ring" viewBox={`0 0 ${size} ${size}`} style={{ width: size, height: size, left: -5, top: -5 }} aria-hidden="true">
       <circle className="track" cx={size / 2} cy={size / 2} r={r} fill="none" strokeWidth={3} />
