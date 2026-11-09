@@ -273,7 +273,6 @@ export const TAUNTS: { text: string; emoji: string }[] = [
   { text: "Fold already", emoji: "🥱" },
   { text: "BOOM", emoji: "💥" },
 ];
-export const TAUNT_COOLDOWN_MS = 6000;
 
 // ----- REST -----
 export interface UserInfo {

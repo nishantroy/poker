@@ -9,7 +9,7 @@ import type {
   ChatMessage, ClientMessage, SeatAction, HandRecordView, HandSummary, LogLine, PublicGhost, PublicSeat, RebuyRequest, ServerMessage, SessionResultRow, TableOptions,
   TableStatus, TableView, TimerInfo,
 } from "@shared/protocol";
-import { LIMITS, TAUNTS, TAUNT_COOLDOWN_MS, defaultOptions, validateConfig } from "@shared/protocol";
+import { LIMITS, TAUNTS, defaultOptions, validateConfig } from "@shared/protocol";
 import { type Flags, defaultFlags, normalizeFlags } from "@shared/flags";
 import { accounts, type Env } from "./env";
 import { errFields, slog, type LogFields, type LogLevel } from "./slog";
@@ -57,8 +57,6 @@ interface Meta {
   flags: Flags;
   /** vote in progress to turn the ghost player on/off: voter userIds */
   ghostVote: { on: boolean; voters: string[] } | null;
-  /** last taunt per userId (cooldown) */
-  lastTaunt: Record<string, number>;
   /** Dealer's choice: the open pick, if any. */
   /** Dealer's choice for an upcoming hand: the next dealer can pick while the current hand plays. No pick keeps the current game. */
   gameChoice: { chooser: number; chooserId: string; options: Variant[]; forHand: number; picked: Variant | null } | null;
@@ -196,7 +194,7 @@ export class TableDO extends DurableObject<Env> {
         this.meta = {
           ...m, options: { ...defaultOptions(), ...(m.options ?? {}) }, hud: m.hud ?? {}, cur: m.cur ?? null, unlocked: m.unlocked ?? [],
           votes: m.votes ?? {}, rabbitShown: m.rabbitShown ?? null, pendingConfig: m.pendingConfig ?? null, autoSatOut: m.autoSatOut ?? [],
-          flags: normalizeFlags(m.flags), ghostVote: m.ghostVote ?? null, lastTaunt: m.lastTaunt ?? {},
+          flags: normalizeFlags(m.flags), ghostVote: m.ghostVote ?? null,
           gameChoice: m.gameChoice ?? null, gameChosenFor: m.gameChosenFor ?? 0, lastChooser: m.lastChooser ?? null, orbitLeft: m.orbitLeft ?? 0, firstButton: m.firstButton ?? null,
           lastActions: m.lastActions ?? {}, endPending: m.endPending ?? false, rabbitShownHands: m.rabbitShownHands ?? [], shown: m.shown ?? { hand: 0, seats: [] }, straddlers: m.straddlers ?? [],
         } as Meta;
@@ -249,7 +247,7 @@ export class TableDO extends DurableObject<Env> {
       createdAt: Date.now(), timer: null, rebuyRequests: [], departed: [], logSeq: 0, chatSeq: 0, leaving: [],
       pendingConfig: null, autoSatOut: [], options: defaultOptions(), hud: {}, cur: null, unlocked: [], votes: {}, rabbitShown: null,
       flags: args.flags ? normalizeFlags(args.flags) : defaultFlags(),
-      ghostVote: null, lastTaunt: {}, gameChoice: null, gameChosenFor: 0, lastChooser: null, orbitLeft: 0, firstButton: null, lastActions: {}, endPending: false, rabbitShownHands: [], shown: { hand: 0, seats: [] }, straddlers: [],
+      ghostVote: null, gameChoice: null, gameChosenFor: 0, lastChooser: null, orbitLeft: 0, firstButton: null, lastActions: {}, endPending: false, rabbitShownHands: [], shown: { hand: 0, seats: [] }, straddlers: [],
     };
     this.game = createGame(validateConfig(args.config));
     this.log("system", `Table created by ${args.hostName}.`);
@@ -751,11 +749,6 @@ export class TableDO extends DurableObject<Env> {
         const id = Number(msg.id);
         if (!Number.isInteger(id) || id < 0 || id >= TAUNTS.length) throw new EngineError("bad_taunt", "Unknown taunt");
         const now = Date.now();
-        const last = meta.lastTaunt[att.userId] ?? 0;
-        if (now - last < TAUNT_COOLDOWN_MS) throw new EngineError("taunt_cooldown", "Easy there — one taunt every few seconds");
-        meta.lastTaunt[att.userId] = now;
-        for (const k of Object.keys(meta.lastTaunt)) if (now - meta.lastTaunt[k]! > 60_000) delete meta.lastTaunt[k];
-        this.save();
         const seat = this.seatOf(att.userId)?.seat ?? null;
         const t = { userId: att.userId, name: att.name, seat, id, ts: now };
         for (const s of this.ctx.getWebSockets()) this.send(s, { t: "taunt", taunt: t });

@@ -156,8 +156,9 @@ send(A, { t: "taunt", id: 3 });
 await wait(200);
 assert(A.errors.length === tauntErrs && B2.taunts && B2.taunts.length === 1 && B2.taunts[0].id === 3 && B2.taunts[0].userId === a.user.id, "taunt broadcast to the table");
 send(A, { t: "taunt", id: 4 });
+send(A, { t: "taunt", id: 5 });
 await wait(200);
-assert(A.errors.at(-1)?.code === "taunt_cooldown", "taunt cooldown enforced");
+assert(A.errors.length === tauntErrs && B2.taunts.length === 3, "no taunt rate limit: back-to-back taunts all go out");
 // wait for the next hand to start with the ghost and two boards
 let ghostHand = null;
 for (let i = 0; i < 60 && !ghostHand; i++) {
@@ -254,7 +255,7 @@ assert(stats.stats.sessions === 1, "profile stats recorded one session");
 assert(stats.stats.hud.hands >= 1, "lifetime HUD updated at session end");
 const hudApi = await (await fetch(`${BASE}/api/hud?ids=${a.user.id},${b.user.id}`, { headers: { cookie: a.cookie } })).json();
 assert(hudApi.rows.length === 2, "HUD API returns both players");
-assert(A.errors.every((e) => e.code === "disabled" || e.code === "taunt_cooldown") && B2.errors.length === 0, "no unexpected socket errors");
+assert(A.errors.every((e) => e.code === "disabled") && B2.errors.length === 0, "no unexpected socket errors");
 
 // ----- auto-deal survives a player dropping between hands -----
 {
