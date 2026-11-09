@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Action, ActionLimits, TableView } from "@shared/protocol";
 import { VARIANTS } from "@engine/variants";
 import { fmtChips } from "../lib/format";
@@ -44,10 +44,34 @@ export function ActionBar({ view, onAction }: { view: TableView; onAction: (a: A
   const isAllIn = amount >= maxBy;
   const fill = limits.maxRaiseTo > limits.minRaiseTo ? ((amount - limits.minRaiseTo) / (limits.maxRaiseTo - limits.minRaiseTo)) * 100 : 100;
 
+  const confirmRaise = () => onAction(isAllIn && spec.limit === "no-limit" ? { type: "allin" } : { type: hand.currentBet === 0 ? "bet" : "raise", amount: clamp(amount) });
+  const amountRef = useRef<HTMLInputElement>(null);
+  // keyboard: Enter confirms the bet, Escape closes the sizer; on desktop the amount box is focused and selected for typing
+  useEffect(() => {
+    if (raising && window.matchMedia("(pointer: fine)").matches) { amountRef.current?.focus(); amountRef.current?.select(); }
+  }, [raising]);
+  useEffect(() => {
+    if (!raising) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setRaising(false);
+      else if (e.key === "Enter" && !(e.target instanceof HTMLInputElement && e.target !== amountRef.current) && !(e.target instanceof HTMLTextAreaElement)) {
+        e.preventDefault();
+        confirmRaise();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
   return (
     <div>
       {raising && (
-        <div className="absolute left-0 right-0 bottom-full mb-2 card-surface p-3 anim-fade-up space-y-2 shadow-pop z-10">
+        <div className="absolute left-0 right-0 bottom-full mb-2 card-surface px-3 py-2 anim-fade-up space-y-2 shadow-pop z-10">
+          <p className="flex items-center gap-3 text-xs text-muted">
+            <span>Your stack <span className="num font-bold text-gold-bright">{fmtChips(me.stack)}</span></span>
+            <span>Pot <span className="num font-bold text-text">{fmtChips(limits.potSize)}</span></span>
+            <span className="ml-auto hidden sm:inline text-dim">Enter to {raiseWord.toLowerCase()} · Esc to cancel</span>
+          </p>
           <div className="flex gap-1.5 overflow-x-auto scroll-thin" role="group" aria-label="Quick raise sizes">
             {presets.map((p) => (
               <button key={p.label} className="chip-toggle whitespace-nowrap flex-1 px-2" aria-pressed={amount === p.value} onClick={() => setAmount(p.value)}>
@@ -55,20 +79,17 @@ export function ActionBar({ view, onAction }: { view: TableView; onAction: (a: A
               </button>
             ))}
           </div>
-          <div className="flex items-center gap-3">
+          <form className="flex items-center gap-3" onSubmit={(e) => { e.preventDefault(); confirmRaise(); }}>
             <input type="range" className="range flex-1" min={limits.minRaiseTo} max={limits.maxRaiseTo} step={1} value={amount}
               style={{ ["--fill" as string]: `${fill}%` }} aria-label={`${raiseWord} amount`}
               onChange={(e) => setAmount(Number(e.target.value))} />
-            <input className="input w-24 text-right font-bold num" type="number" inputMode="numeric" min={limits.minRaiseTo} max={limits.maxRaiseTo} value={amount}
+            <input ref={amountRef} className="input w-24 text-right font-bold num" type="number" inputMode="numeric" enterKeyHint="send" min={limits.minRaiseTo} max={limits.maxRaiseTo} value={amount}
               onChange={(e) => setAmount(Number(e.target.value))} onBlur={() => setAmount(clamp(amount))} aria-label={`${raiseWord} to amount`} />
-          </div>
-          <button className="btn btn-green w-full text-base" onClick={() => onAction(isAllIn && spec.limit === "no-limit" ? { type: "allin" } : { type: hand.currentBet === 0 ? "bet" : "raise", amount: clamp(amount) })}>
-            {isAllIn ? "All-in" : `${raiseWord} to`} <span className="num">{fmtChips(clamp(amount))}</span>
-          </button>
+          </form>
         </div>
       )}
       <div className="grid grid-cols-3 gap-2">
-        <button className="btn btn-danger text-base" onClick={() => onAction({ type: "fold" })}>Fold</button>
+        <button className="btn btn-danger text-base" onClick={() => (raising ? setRaising(false) : onAction({ type: "fold" }))}>{raising ? "Cancel" : "Fold"}</button>
         {limits.canCheck ? (
           <button className="btn text-base" onClick={() => onAction({ type: "check" })}>Check</button>
         ) : (
@@ -78,9 +99,14 @@ export function ActionBar({ view, onAction }: { view: TableView; onAction: (a: A
           </button>
         )}
         {canRaise ? (
-          <button className={`btn text-base ${raising ? "btn-ghost border-border-strong" : "btn-primary"}`} onClick={() => setRaising((r) => !r)} aria-expanded={raising}>
-            {raising ? "Cancel" : raiseWord}
-          </button>
+          raising ? (
+            <button className="btn btn-green text-base flex-col gap-0 leading-tight" onClick={confirmRaise}>
+              <span>{isAllIn ? "All-in" : `${raiseWord} to`}</span>
+              <span className="text-sm num">{fmtChips(clamp(amount))}</span>
+            </button>
+          ) : (
+            <button className="btn btn-primary text-base" onClick={() => setRaising(true)} aria-expanded={false}>{raiseWord}</button>
+          )
         ) : allInIsRaise ? (
           <button className="btn btn-primary text-base" onClick={() => onAction({ type: "allin" })}>All-in</button>
         ) : (

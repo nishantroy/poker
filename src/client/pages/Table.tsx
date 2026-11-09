@@ -12,14 +12,16 @@ import { Link } from "../lib/router";
 import { PlayingCard } from "../components/Card";
 import { BetChip, SeatView } from "../components/Seat";
 import { ActionBar, DiscardBar, RunChoiceBar, runsLabel } from "../components/ActionBar";
-import { EndedModal, HostPanel, LogChat, PlayerMenu, SitSheet, TauntSheet, type SideTab } from "../components/Panels";
+import { EndedModal, HostPanel, LogChat, PlayerMenu, SitSheet, TauntPopover, type SideTab } from "../components/Panels";
 import { HudStrip, PlayerSheet } from "../components/Hud";
 import { Toast } from "../components/ui";
 import { NextGameStrip, RulesSheet } from "../components/Guide";
 import { useAuth } from "../lib/auth";
 
 /** Seat anchor positions (percent of the table area), index 0 = bottom centre, proceeding clockwise on screen. */
-function anchors(n: number, landscape: boolean): { x: number; y: number }[] {
+function anchors(n: number, landscape: boolean, areaH = 0): { x: number; y: number }[] {
+  // the viewer's seat (avatar + nameplate + badge) needs ~100px below its centre so the bottom bar never covers it
+  const bottomY = Math.min(landscape ? 90 : 86, areaH > 0 ? 100 - (100 * 100) / areaH : 100);
   const cx = 50;
   const cy = landscape ? 47 : 44;
   const rx = landscape ? 43 : 38;
@@ -27,7 +29,7 @@ function anchors(n: number, landscape: boolean): { x: number; y: number }[] {
   return Array.from({ length: n }, (_, i) => {
     const t = Math.PI / 2 + (i * 2 * Math.PI) / n;
     const p = { x: cx + rx * Math.cos(t), y: cy + ry * Math.sin(t) };
-    if (i === 0) p.y = landscape ? 90 : 86; // the viewer's own seat sits below the felt
+    if (i === 0) p.y = bottomY; // the viewer's own seat sits below the felt
     return p;
   });
 }
@@ -80,15 +82,18 @@ function useTableSounds(view: TableView | null, play: (s: Sfx) => void, tauntCou
     else if (cardsNow > cardsBefore) play("card");
     let chip = false;
     let allin = false;
+    let fold = false;
     for (const s of view.seats) {
       if (!s) continue;
       const q = p.seats[s.seat];
       if (!q) continue;
       if (s.streetBet > q.streetBet) chip = true;
       if (s.allIn && !q.allIn && s.inHand) allin = true;
+      if (s.folded && !q.folded) fold = true;
     }
     if (allin) play("allin");
     else if (chip) play("chip");
+    else if (fold) play("fold");
     if (h.phase === "showdown" && ph.phase !== "showdown") {
       if (h.result?.badBeat) {
         play("badbeat");
@@ -108,7 +113,13 @@ export function TablePage({ code }: { code: string }) {
   const landscape = useMedia("(orientation: landscape) and (min-width: 640px)");
   const [sitSeat, setSitSeat] = useState<number | null>(null);
   const [panel, setPanel] = useState<null | "host" | "me" | "log">(null);
-  const [logTab, setLogTab] = useState<SideTab>("log");
+  const [logTab, setLogTab] = useState<SideTab>(authFlags.chat ? "chat" : "log");
+  // desktop: log/chat docked beside the table, open by default (remembered per browser)
+  const wide = useMedia("(min-width: 1024px) and (orientation: landscape)");
+  const [dockPref, setDockPref] = useState(() => { try { return localStorage.getItem("fp:dock") !== "0"; } catch { return true; } });
+  const setDock = (v: boolean) => { setDockPref(v); try { localStorage.setItem("fp:dock", v ? "1" : "0"); } catch { /* ignore */ } };
+  const logOpen = wide ? dockPref : panel === "log";
+  const toggleLog = () => (wide ? setDock(!dockPref) : setPanel(panel === "log" ? null : "log"));
   const [hudPref, setHudOn] = useState(() => { try { return localStorage.getItem("fp:hud") !== "0"; } catch { return true; } });
   const flags = view?.flags ?? authFlags;
   const hudOn = hudPref && flags.hud;
@@ -120,8 +131,17 @@ export function TablePage({ code }: { code: string }) {
   const { muted, play, toggle } = useSounds(flags.sounds);
   useTableSounds(view, play, taunts.length);
   const [tauntOpen, setTauntOpen] = useState(false);
+  const closeTaunt = useCallback(() => setTauntOpen(false), []);
   const [rulesOpen, setRulesOpen] = useState(false);
   const [rulesFor, setRulesFor] = useState<Variant | null>(null);
+  const [areaH, setAreaH] = useState(0);
+  const areaObs = useRef<ResizeObserver | null>(null);
+  const areaRef = useCallback((el: HTMLDivElement | null) => {
+    areaObs.current?.disconnect();
+    if (!el) return;
+    areaObs.current = new ResizeObserver(([e]) => setAreaH(Math.round(e!.contentRect.height)));
+    areaObs.current.observe(el);
+  }, []);
   const [splash, setSplash] = useState<number | null>(null);
   const lastSeenChat = useRef(0);
   const [unreadChat, setUnreadChat] = useState(0);
@@ -133,13 +153,22 @@ export function TablePage({ code }: { code: string }) {
     return () => clearTimeout(t);
   }, [error]);
 
+  // your turn: get sheets out of the way of the action bar
+  const myTurnKey = view && view.me.seat !== null && view.hand?.actor === view.me.seat ? `${view.hand.number}:${view.hand.actionSeq}` : null;
+  useEffect(() => {
+    if (!myTurnKey) return;
+    setPanel((p) => (p === "log" ? p : null));
+    setRulesOpen(false);
+    setTauntOpen(false);
+  }, [myTurnKey]);
+
   // unread chat badge
   useEffect(() => {
-    if (panel === "log" && logTab === "chat") {
+    if (logOpen && logTab === "chat") {
       lastSeenChat.current = chat.length;
       setUnreadChat(0);
     } else setUnreadChat(Math.max(0, chat.length - lastSeenChat.current));
-  }, [chat.length, panel, logTab]);
+  }, [chat.length, logOpen, logTab]);
 
   // your-turn alert
   const myTurn = !!view && !!view.hand && view.hand.phase === "betting" && view.me.seat !== null && view.hand.actor === view.me.seat;
@@ -152,6 +181,20 @@ export function TablePage({ code }: { code: string }) {
       vibrate(40);
     }
   }, [turnKey, play]);
+
+  // your clock is running out: a tick each second for the last 5 seconds (double beep on the last one)
+  const myClock = myTurn && view!.timer?.kind === "action" ? view!.timer.at : null;
+  useEffect(() => {
+    if (myClock === null) return;
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    const now = Date.now() + offset;
+    for (let sLeft = 5; sLeft >= 1; sLeft--) {
+      const at = myClock - sLeft * 1000 - now;
+      if (at < 0) continue;
+      timers.push(setTimeout(() => { play(sLeft === 1 ? "tickLast" : "tick"); if (sLeft <= 3) vibrate(30); }, at));
+    }
+    return () => timers.forEach(clearTimeout);
+  }, [myClock, offset, play]);
 
   // bad beat splash: show once per hand for a few seconds
   const badBeatKey = view?.hand?.result?.badBeat && flags.badBeat ? view.hand.number : null;
@@ -205,7 +248,7 @@ export function TablePage({ code }: { code: string }) {
 
   const hand = view.hand;
   const n = view.config.maxSeats;
-  const pos = anchors(n, landscape);
+  const pos = anchors(n, landscape, areaH);
   const mySeat = view.me.seat;
   const rot = mySeat ?? 0;
   const showdown = !!hand && hand.phase === "showdown";
@@ -216,7 +259,7 @@ export function TablePage({ code }: { code: string }) {
   const amDiscarding = !!hand && hand.phase === "discard" && mySeat !== null && hand.pendingDiscard.includes(mySeat);
   const amPickingRuns = !!hand?.runChoice && mySeat !== null && hand.runChoice.pending.includes(mySeat);
   const variant = VARIANTS[hand?.variant ?? view.config.variant];
-  const feltWidth = landscape ? Math.min(window.innerWidth, 1100) * 0.82 : Math.min(window.innerWidth, 560) * 0.74;
+  const feltWidth = landscape ? Math.min(window.innerWidth - (wide && logOpen ? 340 : 0), 1100) * 0.82 : Math.min(window.innerWidth, 560) * 0.74;
   const boardCount = hand?.boards.length ?? 1;
   // several boards stack vertically, so their cards shrink to keep the centre column clear of the side seats
   const boardCap = landscape ? [64, 48, 40] : [64, 34, 28];
@@ -256,7 +299,7 @@ export function TablePage({ code }: { code: string }) {
             {muted ? <BellOff size={18} /> : <Bell size={18} />}
           </button>
         )}
-        <button className="btn btn-ghost btn-sm px-2 relative" onClick={() => setPanel("log")} aria-label={flags.chat ? "Log and chat" : "Hand log"}>
+        <button className="btn btn-ghost btn-sm px-2 relative" onClick={toggleLog} aria-label={flags.chat ? "Log and chat" : "Hand log"} aria-expanded={logOpen}>
           {unreadChat > 0 && flags.chat ? <MessageSquare size={18} /> : <ScrollText size={18} />}
           {unreadChat > 0 && flags.chat && <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 rounded-full bg-brand text-on-brand text-[10px] font-black flex items-center justify-center">{unreadChat}</span>}
         </button>
@@ -281,8 +324,11 @@ export function TablePage({ code }: { code: string }) {
         />
       )}
 
+      <div className="flex-1 min-h-0 flex">
+      <div className="flex-1 min-w-0 flex flex-col">
       {/* table */}
-      <div className="relative flex-1 min-h-0 mx-2">
+      <div ref={areaRef} className="relative flex-1 min-h-0 mx-2">
+        {!wide && logOpen && <div className="absolute inset-x-0 top-0 z-40"><LogChat open={logOpen} mode={"drop"} onClose={() => (wide ? setDock(false) : setPanel(null))} log={log} chat={chat} send={send} tab={logTab} setTab={setLogTab} hands={hands} records={records} mySeat={mySeat} flags={flags} /></div>}
         <div className="absolute" style={{ inset: landscape ? FELT_INSET.landscape : FELT_INSET.portrait }}>
           <div className="felt" />
           {/* centre: pot + board */}
@@ -389,7 +435,10 @@ export function TablePage({ code }: { code: string }) {
                 </button>
               )}
               {seat && seat.streetBet > 0 && !showdown && (
-                <div className="absolute -translate-x-1/2 -translate-y-1/2" style={{ left: `${betPos.x}%`, top: `${betPos.y}%`, zIndex: 3 }}>
+                <div className="absolute -translate-x-1/2 -translate-y-1/2" style={seatNo === mySeat
+                  // your own bet sits beside your cards, not on top of them
+                  ? { left: `calc(50% - ${Math.round(myCardSize * (1 + 0.6 * (variant.holeCards - 1)) / 2 + 40)}px)`, top: `calc(${p.y}% - ${Math.round(myCardSize * 0.95)}px)`, zIndex: 3 }
+                  : { left: `${betPos.x}%`, top: `${betPos.y}%`, zIndex: 3 }}>
                   <BetChip amount={seat.streetBet} />
                 </div>
               )}
@@ -429,8 +478,9 @@ export function TablePage({ code }: { code: string }) {
       {/* bottom bar */}
       <div className="shrink-0 px-3 pt-2 relative" style={{ paddingBottom: "calc(var(--sab) + 10px)" }}>
         <div className="max-w-xl mx-auto relative flex items-stretch gap-2">
+          <TauntPopover open={tauntOpen && flags.taunts} onClose={closeTaunt} onPick={(id) => send({ t: "taunt", id })} />
           {flags.taunts && !(myTurn && view.me.limits) && !amDiscarding && !amPickingRuns && (
-            <button className="btn btn-sm px-3 shrink-0" onClick={() => setTauntOpen(true)} aria-label="Send a taunt"><Smile size={18} /></button>
+            <button data-taunt-toggle className="btn btn-sm px-3 shrink-0" onClick={() => setTauntOpen((o) => !o)} aria-label="Send a taunt" aria-expanded={tauntOpen}><Smile size={18} /></button>
           )}
           <div className="flex-1 min-w-0">
           {myTurn && view.me.limits ? (
@@ -445,13 +495,14 @@ export function TablePage({ code }: { code: string }) {
           </div>
         </div>
       </div>
+      </div>
+      {wide && logOpen && <LogChat open={logOpen} mode={"dock"} onClose={() => (wide ? setDock(false) : setPanel(null))} log={log} chat={chat} send={send} tab={logTab} setTab={setLogTab} hands={hands} records={records} mySeat={mySeat} flags={flags} />}
+      </div>
       <RulesSheet open={rulesOpen} onClose={() => { setRulesOpen(false); setRulesFor(null); }} current={rulesFor ?? hand?.variant ?? view.config.variant} flags={flags} />
-      <TauntSheet open={tauntOpen} onClose={() => setTauntOpen(false)} onPick={(id) => send({ t: "taunt", id })} />
 
       <SitSheet open={sitSeat !== null} seat={sitSeat} config={view.config} onClose={() => setSitSeat(null)} onSit={(seat, buyIn) => { send({ t: "sit", seat, buyIn }); setSitSeat(null); }} />
       <HostPanel open={panel === "host"} onClose={() => setPanel(null)} view={view} send={send} />
       <PlayerMenu open={panel === "me"} onClose={() => setPanel(null)} view={view} send={send} />
-      <LogChat open={panel === "log"} onClose={() => setPanel(null)} log={log} chat={chat} send={send} tab={logTab} setTab={setLogTab} hands={hands} records={records} mySeat={mySeat} flags={flags} />
       <PlayerSheet seat={playerSheet !== null ? view.seats[playerSheet] ?? null : null} session={playerSheet !== null ? view.hud[view.seats[playerSheet]?.playerId ?? ""] : undefined} onClose={() => setPlayerSheet(null)} />
       {ended && <EndedModal results={ended} me={view.me.userId} />}
     </div>

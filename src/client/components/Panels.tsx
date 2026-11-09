@@ -240,8 +240,12 @@ export function HostPanel({ open, onClose, view, send }: { open: boolean; onClos
 
 export type SideTab = "log" | "chat" | "hands";
 
-export function LogChat({ open, onClose, log, chat, send, tab, setTab, hands, records, mySeat, flags }: {
-  open: boolean; onClose: () => void; log: LogLine[]; chat: ChatMessage[]; send: (m: ClientMessage) => void; tab: SideTab; setTab: (t: SideTab) => void;
+/**
+ * Log / chat / hands. Never modal: on desktop it's docked beside the table and open by default;
+ * on phones it drops down under the header (the felt's lower half, your cards and the action bar stay usable).
+ */
+export function LogChat({ open, mode, onClose, log, chat, send, tab, setTab, hands, records, mySeat, flags }: {
+  open: boolean; mode: "dock" | "drop"; onClose: () => void; log: LogLine[]; chat: ChatMessage[]; send: (m: ClientMessage) => void; tab: SideTab; setTab: (t: SideTab) => void;
   hands: HandSummary[] | null; records: Record<number, HandRecordView>; mySeat: number | null; flags: Flags;
 }) {
   const tabs = ((["log", "chat", "hands"] as const).filter((t) => t === "log" || (t === "chat" && flags.chat) || (t === "hands" && flags.replays)));
@@ -250,7 +254,7 @@ export function LogChat({ open, onClose, log, chat, send, tab, setTab, hands, re
   const [openHand, setOpenHand] = useState<number | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (open && tab !== "hands") endRef.current?.scrollIntoView({ block: "end" });
+    if (open && tab !== "hands") endRef.current?.scrollIntoView({ block: "nearest" });
   }, [open, log.length, chat.length, tab]);
   useEffect(() => { if (!open) setOpenHand(null); }, [open]);
   const openReplay = (n: number) => { setOpenHand(n); send({ t: "getHand", number: n }); };
@@ -267,20 +271,24 @@ export function LogChat({ open, onClose, log, chat, send, tab, setTab, hands, re
     send({ t: "chat", text: t });
     setText("");
   };
+  if (!open) return null;
   return (
-    <Sheet open={open} onClose={onClose} title={tab === "log" ? "Hand log" : tab === "chat" ? "Chat" : openHand !== null ? "Replay" : "Hands"} side="right">
-      <div className="flex flex-col h-full min-h-[50dvh]">
-        <div className="grid gap-1 p-1 rounded-xl bg-surface-2 mb-3" style={{ gridTemplateColumns: `repeat(${tabs.length}, minmax(0, 1fr))` }} role="tablist">
-          {tabs.map((t) => (
-            <button key={t} role="tab" aria-selected={tab === t} onClick={() => { setTab(t); setOpenHand(null); }} className={`min-h-[40px] rounded-lg text-sm font-semibold ${tab === t ? "bg-surface-3" : "text-muted"}`}>{t === "log" ? "Log" : t === "chat" ? "Chat" : "Hands"}</button>
-          ))}
+    <section className={mode === "dock" ? "logchat-dock" : "logchat-drop anim-fade-up"} aria-label="Log and chat">
+      <div className="flex flex-col h-full min-h-0">
+        <div className="flex items-center gap-2 mb-2">
+          <div className="flex-1 grid gap-1 p-1 rounded-xl bg-surface-2" style={{ gridTemplateColumns: `repeat(${tabs.length}, minmax(0, 1fr))` }} role="tablist">
+            {tabs.map((t) => (
+              <button key={t} role="tab" aria-selected={tab === t} onClick={() => { setTab(t); setOpenHand(null); }} className={`min-h-[34px] rounded-lg text-sm font-semibold ${tab === t ? "bg-surface-3" : "text-muted"}`}>{t === "log" ? "Log" : t === "chat" ? "Chat" : "Hands"}</button>
+            ))}
+          </div>
+          <button className="btn btn-ghost btn-sm px-2" onClick={onClose} aria-label={mode === "dock" ? "Hide panel" : "Close"}><X size={18} /></button>
         </div>
         {tab === "hands" ? (
-          <div className="flex-1 overflow-y-auto scroll-thin pb-2 max-h-[70dvh]">
+          <div className="flex-1 min-h-0 overflow-y-auto scroll-thin pb-2">
             {openHand === null ? <HandsList hands={hands} onOpen={openReplay} send={send} /> : <ReplayView rec={records[openHand]} onBack={() => setOpenHand(null)} send={send} mySeat={mySeat} equityOn={flags.equity} />}
           </div>
         ) : (
-        <div className="flex-1 overflow-y-auto scroll-thin text-sm space-y-1 pb-2 max-h-[60dvh]">
+        <div className="flex-1 min-h-0 overflow-y-auto scroll-thin text-sm space-y-1 pb-2">
           {tab === "log"
             ? log.map((l) => (
                 <p key={l.id} className={`leading-snug ${l.kind === "result" ? "text-gold-bright font-semibold" : l.kind === "street" ? "text-blue font-semibold" : l.kind === "system" ? "text-dim" : "text-muted"}`}>{l.text}</p>
@@ -298,23 +306,31 @@ export function LogChat({ open, onClose, log, chat, send, tab, setTab, hands, re
           </form>
         )}
       </div>
-    </Sheet>
+    </section>
   );
 }
 
-export function TauntSheet({ open, onClose, onPick }: { open: boolean; onClose: () => void; onPick: (id: number) => void }) {
+/** Taunt picker: a small popover above the button. The table stays visible and playable underneath. */
+export function TauntPopover({ open, onClose, onPick }: { open: boolean; onClose: () => void; onPick: (id: number) => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: PointerEvent) => { if (ref.current && !ref.current.contains(e.target as Node) && !(e.target as Element).closest?.("[data-taunt-toggle]")) onClose(); };
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("pointerdown", close);
+    document.addEventListener("keydown", esc);
+    return () => { document.removeEventListener("pointerdown", close); document.removeEventListener("keydown", esc); };
+  }, [open, onClose]);
+  if (!open) return null;
   return (
-    <Sheet open={open} onClose={onClose} title="Taunt">
-      <div className="grid grid-cols-3 gap-2">
-        {TAUNTS.map((t, i) => (
-          <button key={i} className="card-surface p-3 flex flex-col items-center gap-1 hover:bg-surface-2 active:scale-95 transition-transform" onClick={() => { onPick(i); onClose(); }}>
-            <span className="text-2xl" aria-hidden="true">{t.emoji}</span>
-            <span className="text-xs font-semibold text-center leading-tight">{t.text}</span>
-          </button>
-        ))}
-      </div>
-      <p className="text-xs text-dim mt-3">Pops up over your seat for a few seconds. Be nice-ish.</p>
-    </Sheet>
+    <div ref={ref} className="taunt-pop anim-fade-up" role="menu" aria-label="Send a taunt">
+      {TAUNTS.map((t, i) => (
+        <button key={i} role="menuitem" className="taunt-pop-item" onClick={() => { onPick(i); onClose(); }}>
+          <span className="text-lg leading-none" aria-hidden="true">{t.emoji}</span>
+          <span className="leading-tight">{t.text}</span>
+        </button>
+      ))}
+    </div>
   );
 }
 

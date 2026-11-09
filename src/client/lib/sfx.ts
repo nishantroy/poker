@@ -2,7 +2,7 @@
  * Tiny WebAudio synth for table sounds. No assets, no network; every sound is a few oscillator
  * envelopes so the page stays snappy. Audio is created lazily on first play (browsers require a gesture).
  */
-export type Sfx = "turn" | "chip" | "card" | "allin" | "win" | "badbeat" | "taunt" | "eliminate" | "ghost";
+export type Sfx = "turn" | "chip" | "card" | "allin" | "win" | "badbeat" | "taunt" | "eliminate" | "ghost" | "fold" | "tick" | "tickLast";
 
 let ctx: AudioContext | null = null;
 let master: GainNode | null = null;
@@ -89,6 +89,19 @@ export function playSfx(name: Sfx) {
     case "eliminate":
       tone(a, { type: "square", f0: 440, f1: 220, t: 0.25, dur: 0.3, gain: 0.07 });
       noise(a, 0.25, 0.2, 400);
+      break;
+    case "fold":
+      // cards slid into the muck: a soft swish and a low drop
+      noise(a, 0.16, 0.14, 700);
+      tone(a, { type: "triangle", f0: 320, f1: 140, t: 0.14, dur: 0.16, gain: 0.06 });
+      break;
+    case "tick":
+      // your clock is running out
+      tone(a, { type: "square", f0: 1240, dur: 0.06, gain: 0.07 });
+      break;
+    case "tickLast":
+      tone(a, { type: "square", f0: 1480, dur: 0.09, gain: 0.1 });
+      tone(a, { type: "square", f0: 1480, dur: 0.09, gain: 0.1, delay: 0.14 });
       break;
     case "ghost":
       tone(a, { f0: 300, f1: 600, t: 0.4, dur: 0.6, gain: 0.07 });
