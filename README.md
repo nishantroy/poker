@@ -2,7 +2,7 @@
 
 A hosted, mobile-friendly home-game poker app for 6–8 friends. Join a table by link, play in real time, keep lifetime stats. Runs entirely on the **Cloudflare Workers free plan**.
 
-**Variants:** No-Limit Hold'em, Pot-Limit Omaha (4, 5 and 6 card), Pineapple and Crazy Pineapple. The host can switch the variant and blinds between hands.
+**Variants:** No-Limit Hold'em, Pot-Limit Omaha (4, 5 and 6 card), PLO Hi-Lo, Irish Hi-Lo, Donk'em and Pineapple (3 cards, discard one after the flop). The host can switch the variant and blinds between hands.
 
 **Extras:** a per-player HUD (VPIP, PFR, 3-bet, AF, WTSD, W$SD for the session and lifetime), hand replays with street-by-street equities, and rabbit hunting.
 

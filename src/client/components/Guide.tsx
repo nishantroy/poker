@@ -1,10 +1,8 @@
 import { useEffect, useState } from "react";
-import { VARIANTS, type Variant } from "@engine/variants";
+import { VARIANTS, VARIANT_IDS, type Variant } from "@engine/variants";
 import { GAME_GUIDE, HOUSE_RULES } from "@shared/guide";
 import type { Flags } from "@shared/flags";
 import { Sheet } from "./ui";
-
-const VARIANT_IDS = Object.keys(VARIANTS) as Variant[];
 
 /** Which house rules to explain, given the operator flags. */
 function houseRulesFor(flags: Flags) {

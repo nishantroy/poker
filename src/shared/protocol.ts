@@ -1,5 +1,5 @@
 import type { Card } from "@engine/cards";
-import { type Variant, isVariant } from "@engine/variants";
+import { type Variant, playableVariant } from "@engine/variants";
 import type { Action, ActionLimits, BadBeat, BoardHand, HandResult, Phase, Street, TableConfig } from "@engine/types";
 import type { HandRecord, HudCounters } from "@engine/hud";
 import type { Flags } from "./flags";
@@ -347,7 +347,7 @@ export function validateConfig(input: unknown): TableConfig {
     return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : dflt;
   };
   const cfg: TableConfig = {
-    variant: isVariant(o.variant) ? o.variant : d.variant,
+    variant: playableVariant(o.variant) ?? d.variant,
     smallBlind: int(o.smallBlind, 1, 1_000_000, d.smallBlind),
     bigBlind: int(o.bigBlind, 1, 2_000_000, d.bigBlind),
     ante: int(o.ante, 0, 1_000_000, d.ante),

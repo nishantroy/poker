@@ -19,6 +19,8 @@ export interface VariantSpec {
   streetCards?: [number, number, number];
   /** Extra board cards dealt after the river betting, with no betting, before showdown (Donk'em's "super river"). */
   superRiver?: number;
+  /** No longer offered for new games; kept so old hands and replays still play back. */
+  retired?: boolean;
 }
 
 /** Cards dealt on a street (preflop deals none). */
@@ -48,18 +50,19 @@ export const VARIANTS: Record<Variant, VariantSpec> = {
   irish: { id: "irish", name: "Irish Hi-Lo", short: "IRISH", holeCards: 5, limit: "pot-limit", holeRule: "twoOrThree", hiLo: true },
   pineapple: {
     id: "pineapple",
-    name: "Pineapple",
-    short: "PINE",
+    name: "Pineapple (preflop discard)",
+    short: "PINE-P",
     holeCards: 3,
     limit: "no-limit",
     holeRule: "any",
     discardAfter: "preflop",
     discardTo: 2,
+    retired: true,
   },
   "crazy-pineapple": {
     id: "crazy-pineapple",
-    name: "Crazy Pineapple",
-    short: "CRAZY",
+    name: "Pineapple",
+    short: "PINE",
     holeCards: 3,
     limit: "no-limit",
     holeRule: "any",
@@ -68,8 +71,16 @@ export const VARIANTS: Record<Variant, VariantSpec> = {
   },
 };
 
-export const VARIANT_IDS = Object.keys(VARIANTS) as Variant[];
+/** Games that can be picked for a table (retired ones excluded). */
+export const VARIANT_IDS = (Object.keys(VARIANTS) as Variant[]).filter((v) => !VARIANTS[v].retired);
 
+/** Any known variant, including retired ones (old hand records). */
 export function isVariant(v: unknown): v is Variant {
-  return typeof v === "string" && v in VARIANTS;
+  return typeof v === "string" && Object.prototype.hasOwnProperty.call(VARIANTS, v);
+}
+
+/** A variant a table can be set to. Retired ids map to their replacement. */
+export function playableVariant(v: unknown): Variant | null {
+  if (v === "pineapple") return "crazy-pineapple";
+  return isVariant(v) && !VARIANTS[v].retired ? v : null;
 }

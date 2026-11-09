@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import {
-  EngineError, GHOST_SEAT, VARIANTS, riverBoardSize, advance, applyAction, boardsThatFit, canStartHand, chooseRuns, cryptoRng, nextButtonSeat, computePots, createGame, forfeit, getLimits, isHandLive,
+  EngineError, GHOST_SEAT, VARIANTS, VARIANT_IDS, riverBoardSize, advance, applyAction, boardsThatFit, canStartHand, chooseRuns, cryptoRng, nextButtonSeat, computePots, createGame, forfeit, getLimits, isHandLive,
   participants, rabbitBoards, removePlayer, seatPlayer, setGhost, startHand, timeout,
   type GameEvent, type GameState, type TableConfig, type Variant,
 } from "@engine/index";
@@ -814,7 +814,7 @@ export class TableDO extends DurableObject<Env> {
     const g = this.game!;
     const meta = this.meta!;
     if (meta.pendingConfig) {
-      g.config = meta.pendingConfig;
+      g.config = validateConfig(meta.pendingConfig);
       meta.pendingConfig = null;
     }
     // players who dropped off before the hand sit out automatically (and return when they reconnect)
@@ -870,7 +870,7 @@ export class TableDO extends DurableObject<Env> {
   private gameOptions(): Variant[] {
     const g = this.game!;
     const n = participants(g).length;
-    return (Object.keys(VARIANTS) as Variant[]).filter((v) => boardsThatFit({ ...g.config, variant: v }, n, false) > 0);
+    return VARIANT_IDS.filter((v) => boardsThatFit({ ...g.config, variant: v }, n, false) > 0);
   }
 
   /**

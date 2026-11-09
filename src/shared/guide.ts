@@ -91,13 +91,9 @@ export const GAME_GUIDE: Record<Variant, GameGuide> = {
     ],
   },
   pineapple: {
-    tagline: "Three cards, throw one away before the flop.",
-    rules: [
-      "Everyone gets 3 cards and bets preflop.",
-      "After preflop betting, each player discards one card. Then it plays exactly like Hold'em.",
-      "No-limit betting. Use any of your 2 remaining cards with the board.",
-    ],
-    watchOut: ["Pick the two that work together. Suited and connected beats two random high cards."],
+    tagline: "Retired: three cards, throw one away before the flop.",
+    rules: ["Everyone got 3 cards and discarded one after preflop betting. Replaced by Pineapple (discard after the flop)."],
+    watchOut: [],
   },
   "crazy-pineapple": {
     tagline: "Three cards, throw one away after the flop.",
