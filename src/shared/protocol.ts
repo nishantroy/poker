@@ -83,7 +83,7 @@ export interface PublicPot {
 }
 
 export interface TimerInfo {
-  kind: "action" | "discard" | "runChoice" | "chooseGame" | "runout" | "nextHand";
+  kind: "action" | "discard" | "runChoice" | "runout" | "nextHand";
   at: number; // epoch ms
   durationMs: number;
 }
@@ -371,8 +371,8 @@ export function validateConfig(input: unknown): TableConfig {
 
 export interface DealerChoiceInfo {
   mode: "hand" | "orbit";
-  /** Open pick: the dealer's seat and the games that fit. */
-  picking: { chooser: number; options: Variant[] } | null;
+  /** Open pick for the next hand: the next dealer's seat, the games that fit, and their pick so far (null = keep the current game). */
+  picking: { chooser: number; options: Variant[]; picked: Variant | null } | null;
   /** Orbit mode: hands left before the next pick. */
   handsLeft: number | null;
 }

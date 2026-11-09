@@ -5,7 +5,7 @@ import type { Action, PublicSeat, TableView } from "@shared/protocol";
 import { TAUNTS } from "@shared/protocol";
 import { GHOST_SEAT } from "@engine/types";
 import { playSfx, vibrate, type Sfx } from "../lib/sfx";
-import { VARIANTS, fullBoardSize } from "@engine/variants";
+import { VARIANTS, fullBoardSize, type Variant } from "@engine/variants";
 import { useTable } from "../lib/socket";
 import { fmtChips } from "../lib/format";
 import { Link } from "../lib/router";
@@ -15,7 +15,7 @@ import { ActionBar, DiscardBar, RunChoiceBar, runsLabel } from "../components/Ac
 import { EndedModal, HostPanel, LogChat, PlayerMenu, SitSheet, TauntSheet, type SideTab } from "../components/Panels";
 import { HudStrip, PlayerSheet } from "../components/Hud";
 import { Toast } from "../components/ui";
-import { GameChoiceSheet, RulesSheet } from "../components/Guide";
+import { NextGameStrip, RulesSheet } from "../components/Guide";
 import { useAuth } from "../lib/auth";
 
 /** Seat anchor positions (percent of the table area), index 0 = bottom centre, proceeding clockwise on screen. */
@@ -121,9 +121,7 @@ export function TablePage({ code }: { code: string }) {
   useTableSounds(view, play, taunts.length);
   const [tauntOpen, setTauntOpen] = useState(false);
   const [rulesOpen, setRulesOpen] = useState(false);
-  const [choiceHidden, setChoiceHidden] = useState(false);
-  const pickKey = view?.dealerChoice?.picking ? `${view.handCount}:${view.dealerChoice.picking.chooser}` : null;
-  useEffect(() => { if (pickKey) setChoiceHidden(false); }, [pickKey]);
+  const [rulesFor, setRulesFor] = useState<Variant | null>(null);
   const [splash, setSplash] = useState<number | null>(null);
   const lastSeenChat = useRef(0);
   const [unreadChat, setUnreadChat] = useState(0);
@@ -270,6 +268,18 @@ export function TablePage({ code }: { code: string }) {
           </button>
         )}
       </header>
+      {view.dealerChoice?.picking && view.status === "running" && (
+        <NextGameStrip
+          chooserName={view.seats[view.dealerChoice.picking.chooser]?.name ?? "The next dealer"}
+          mine={view.dealerChoice.picking.chooser === view.me.seat}
+          options={view.dealerChoice.picking.options}
+          current={view.config.variant}
+          picked={view.dealerChoice.picking.picked}
+          mode={view.dealerChoice.mode}
+          onPick={(variant) => send({ t: "chooseGame", variant })}
+          onRules={(v) => { setRulesFor(v); setRulesOpen(true); }}
+        />
+      )}
 
       {/* table */}
       <div className="relative flex-1 min-h-0 mx-2">
@@ -430,23 +440,12 @@ export function TablePage({ code }: { code: string }) {
           ) : amDiscarding ? (
             <DiscardBar selected={selectedCard} count={hand!.pendingDiscard.length} onDiscard={() => selectedCard !== null && act({ type: "discard", amount: selectedCard })} />
           ) : (
-            <StatusBar view={view} onSit={() => setSitSeat(firstEmpty(view.seats))} onStart={() => send({ t: "start" })} onRabbit={() => send({ t: "rabbit" })} onPickGame={() => setChoiceHidden(false)} onShow={() => send({ t: "show" })} />
+            <StatusBar view={view} onSit={() => setSitSeat(firstEmpty(view.seats))} onStart={() => send({ t: "start" })} onRabbit={() => send({ t: "rabbit" })} onShow={() => send({ t: "show" })} />
           )}
           </div>
         </div>
       </div>
-      {view.dealerChoice?.picking && view.dealerChoice.picking.chooser === view.me.seat && (
-        <GameChoiceSheet
-          open={!choiceHidden}
-          onClose={() => setChoiceHidden(true)}
-          options={view.dealerChoice.picking.options}
-          current={view.config.variant}
-          mode={view.dealerChoice.mode}
-          secondsLeft={view.timer?.kind === "chooseGame" ? Math.max(0, Math.round((view.timer.at - Date.now()) / 1000)) : null}
-          onPick={(variant) => { send({ t: "chooseGame", variant }); setChoiceHidden(false); }}
-        />
-      )}
-      <RulesSheet open={rulesOpen} onClose={() => setRulesOpen(false)} current={hand?.variant ?? view.config.variant} flags={flags} />
+      <RulesSheet open={rulesOpen} onClose={() => { setRulesOpen(false); setRulesFor(null); }} current={rulesFor ?? hand?.variant ?? view.config.variant} flags={flags} />
       <TauntSheet open={tauntOpen} onClose={() => setTauntOpen(false)} onPick={(id) => send({ t: "taunt", id })} />
 
       <SitSheet open={sitSeat !== null} seat={sitSeat} config={view.config} onClose={() => setSitSeat(null)} onSit={(seat, buyIn) => { send({ t: "sit", seat, buyIn }); setSitSeat(null); }} />
@@ -499,7 +498,7 @@ function CenterStatus({ view, landscape }: { view: TableView; landscape: boolean
   return <p className={`text-xs font-semibold text-center ${tone} ${landscape ? "text-sm" : ""} bg-black/40 rounded-full px-3 py-1 anim-fade-up`} key={text}>{text}</p>;
 }
 
-function StatusBar({ view, onSit, onStart, onRabbit, onPickGame, onShow }: { view: TableView; onSit: () => void; onStart: () => void; onRabbit: () => void; onPickGame: () => void; onShow: () => void }) {
+function StatusBar({ view, onSit, onStart, onRabbit, onShow }: { view: TableView; onSit: () => void; onStart: () => void; onRabbit: () => void; onShow: () => void }) {
   const hand = view.hand;
   const mySeat = view.me.seat !== null ? view.seats[view.me.seat] : null;
   const players = view.seats.filter(Boolean).length;
@@ -511,11 +510,6 @@ function StatusBar({ view, onSit, onStart, onRabbit, onPickGame, onShow }: { vie
     if (players < view.config.maxSeats) action = { label: "Take a seat", onClick: onSit, cls: "btn-primary" };
   } else if (mySeat.status === "sittingOut") text = "You're sitting out. Open your menu to come back.";
   else if (mySeat.stack === 0 && !mySeat.inHand) text = "You're out of chips. Rebuy from your menu.";
-  else if (view.dealerChoice?.picking && (!hand || hand.phase === "showdown")) {
-    const chooser = view.dealerChoice.picking.chooser;
-    text = chooser === view.me.seat ? "You're the dealer. Pick the game." : `🎲 ${view.seats[chooser]?.name ?? "The dealer"} is picking the game…`;
-    if (chooser === view.me.seat) action = { label: "Pick game", onClick: onPickGame, cls: "btn-primary" };
-  }
   else if (!hand || hand.phase === "showdown") {
     if (view.status === "running") text = view.timer?.kind === "nextHand" ? "Next hand starting…" : "Waiting for another player. The next hand deals itself.";
     else if (view.status === "paused") text = "Game paused by the host.";

@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { Check, ChevronDown, Dices } from "lucide-react";
 import { VARIANTS, VARIANT_IDS, type Variant } from "@engine/variants";
 import { GAME_GUIDE, HOUSE_RULES } from "@shared/guide";
 import type { Flags } from "@shared/flags";
@@ -60,43 +61,58 @@ export function RulesSheet({ open, onClose, current, flags }: { open: boolean; o
   );
 }
 
-/** Dealer's choice picker: every game that fits, with a one-line explanation and full rules on tap. */
-export function GameChoiceSheet({ open, onClose, options, current, mode, onPick, secondsLeft }: {
-  open: boolean; onClose: () => void; options: Variant[]; current: Variant; mode: "hand" | "orbit"; onPick: (v: Variant) => void; secondsLeft: number | null;
+/**
+ * Dealer's choice, non-blocking: a slim strip under the header while the current hand plays.
+ * The next dealer taps it for a small dropdown of games; everyone else just sees who's picking (and the pick).
+ * No pick keeps the current game.
+ */
+export function NextGameStrip({ chooserName, mine, options, current, picked, mode, onPick, onRules }: {
+  chooserName: string; mine: boolean; options: Variant[]; current: Variant; picked: Variant | null; mode: "hand" | "orbit";
+  onPick: (v: Variant) => void; onRules: (v: Variant) => void;
 }) {
-  const [info, setInfo] = useState<Variant | null>(null);
-  useEffect(() => { if (!open) setInfo(null); }, [open]);
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: PointerEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("pointerdown", close);
+    document.addEventListener("keydown", esc);
+    return () => { document.removeEventListener("pointerdown", close); document.removeEventListener("keydown", esc); };
+  }, [open]);
+  const span = mode === "orbit" ? "next orbit" : "next hand";
+  const next = picked ?? current;
   return (
-    <Sheet open={open} onClose={onClose} title="Dealer's choice">
-      {info ? (
-        <div className="space-y-4">
-          <GameRules variant={info} />
-          <div className="grid grid-cols-2 gap-2">
-            <button className="btn" onClick={() => setInfo(null)}>Back</button>
-            <button className="btn btn-primary" onClick={() => onPick(info)}>Deal {VARIANTS[info].short}</button>
-          </div>
-        </div>
+    <div ref={ref} className="relative z-30 shrink-0 px-3 pb-1 flex justify-center">
+      {mine ? (
+        <button className={`next-game-strip ${picked ? "" : "next-game-strip-hot"}`} onClick={() => setOpen((o) => !o)} aria-expanded={open} aria-haspopup="listbox">
+          <Dices size={14} aria-hidden="true" />
+          <span>{picked ? <>You picked <b>{VARIANTS[picked].short}</b> for the {span}</> : <>Your pick for the {span}</>}</span>
+          <ChevronDown size={14} aria-hidden="true" className={open ? "rotate-180 transition-transform" : "transition-transform"} />
+        </button>
       ) : (
-        <div className="space-y-3">
-          <p className="text-sm text-muted">
-            You're the dealer. Pick the game {mode === "orbit" ? "for the next orbit" : "for this hand"}.
-            {secondsLeft !== null && <> No pick in {secondsLeft}s keeps {VARIANTS[current].short}.</>}
-          </p>
-          <ul className="space-y-2">
-            {options.map((v) => (
-              <li key={v} className="flex items-stretch gap-2">
-                <button className={`flex-1 text-left card-surface px-3 py-2.5 rounded-xl border ${v === current ? "border-cyan/50" : "border-transparent"} hover:border-white/20`} onClick={() => onPick(v)}>
-                  <span className="font-bold">{VARIANTS[v].name}</span>
-                  {v === current && <span className="pill-cyan pill ml-2 text-[10px]">current</span>}
-                  <span className="block text-xs text-muted mt-0.5">{GAME_GUIDE[v].tagline}</span>
-                </button>
-                <button className="btn btn-ghost px-3" onClick={() => setInfo(v)} aria-label={`Rules for ${VARIANTS[v].name}`}>Rules</button>
-              </li>
-            ))}
-          </ul>
+        <p className="next-game-strip text-muted" aria-live="polite">
+          <Dices size={14} aria-hidden="true" />
+          <span>{picked ? <>{chooserName} picked <b className="text-text">{VARIANTS[picked].short}</b> for the {span}</> : <>{chooserName} picks the {span}</>}</span>
+        </p>
+      )}
+      {mine && open && (
+        <div className="next-game-pop anim-fade-up" role="listbox" aria-label="Pick the next game">
+          <p className="text-[11px] text-dim px-2 pt-1 pb-1.5">Deals after this hand. No pick keeps {VARIANTS[current].short}.</p>
+          {options.map((v) => (
+            <div key={v} className="flex items-stretch gap-1">
+              <button role="option" aria-selected={v === next} className={`flex-1 text-left px-2 py-1.5 rounded-lg hover:bg-white/5 ${v === next ? "bg-white/8" : ""}`} onClick={() => { onPick(v); setOpen(false); }}>
+                <span className="font-bold text-sm">{VARIANTS[v].name}</span>
+                {v === current && <span className="text-[10px] text-cyan ml-1.5">now</span>}
+                {v === picked && <Check size={13} className="inline ml-1.5 text-green-bright" aria-label="your pick" />}
+                <span className="block text-[11px] text-muted leading-snug">{GAME_GUIDE[v].tagline}</span>
+              </button>
+              <button className="px-2 text-[11px] text-dim hover:text-text" onClick={() => onRules(v)} aria-label={`Rules for ${VARIANTS[v].name}`}>Rules</button>
+            </div>
+          ))}
         </div>
       )}
-    </Sheet>
+    </div>
   );
 }
 

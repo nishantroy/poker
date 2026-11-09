@@ -368,3 +368,21 @@ h1, h2, h3, .display { font-family: var(--font-display); letter-spacing: -0.01em
 .action-badge.action-raise { background: linear-gradient(90deg, var(--color-brand), var(--color-orange)); color: var(--color-on-brand); border-color: transparent; }
 .action-badge.action-straddle { background: #2a1f5c; color: #c9b8ff; border-color: rgba(201, 184, 255, 0.45); }
 .action-badge.action-allin { background: var(--color-gold); color: #2a1a00; border-color: transparent; }
+
+/* dealer's choice: slim strip under the header + small dropdown (never covers the table) */
+.next-game-strip {
+  @apply inline-flex items-center gap-1.5 rounded-full px-3 text-xs font-semibold;
+  min-height: 30px;
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+}
+button.next-game-strip { color: var(--color-text); }
+.next-game-strip-hot { border-color: var(--color-gold); color: var(--color-gold-bright) !important; box-shadow: 0 0 12px rgba(255, 196, 92, 0.25); }
+.next-game-pop {
+  position: absolute; top: 100%; left: 0; right: 0; margin: 0 auto;
+  width: min(320px, calc(100vw - 24px)); max-height: 55vh; overflow-y: auto;
+  @apply rounded-xl p-1.5 space-y-0.5;
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border-strong);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+}

@@ -60,9 +60,12 @@ interface Meta {
   /** last taunt per userId (cooldown) */
   lastTaunt: Record<string, number>;
   /** Dealer's choice: the open pick, if any. */
-  gameChoice: { chooser: number; chooserId: string; options: Variant[] } | null;
+  /** Dealer's choice for an upcoming hand: the next dealer can pick while the current hand plays. No pick keeps the current game. */
+  gameChoice: { chooser: number; chooserId: string; options: Variant[]; forHand: number; picked: Variant | null } | null;
   /** Dealer's choice: hand number the current pick was made for (skip asking again). */
   gameChosenFor: number;
+  /** Dealer's choice by orbit: who picked last, so the next orbit's pick moves one seat on (the button alone would come back to them). */
+  lastChooser: number | null;
   /** Dealer's choice per orbit: hands left before the next pick. */
   orbitLeft: number;
   /** First hand only: button drawn early so that player can pick the game. */
@@ -89,7 +92,6 @@ const NEXT_HAND_DELAY_MS = 4500;
 const NEXT_HAND_DELAY_SHOWDOWN_MS = 6000;
 const DISCARD_TIMER_MS = 20_000;
 const RUN_CHOICE_MS = 12_000;
-const GAME_CHOICE_MS = 20_000;
 const BAD_BEAT_EXTRA_MS = 3000;
 
 const SCHEMA = `
@@ -154,7 +156,7 @@ export class TableDO extends DurableObject<Env> {
     const meta = this.meta;
     if (!g || !meta) return { handLive: false, status: "ended", sockets: 0, lastActivityAt: 0 };
     const last = this.sql.exec<{ ts: number | null }>("SELECT MAX(ts) AS ts FROM log").toArray()[0]?.ts ?? 0;
-    return { handLive: isHandLive(g) || !!meta.gameChoice, status: meta.status, sockets: this.ctx.getWebSockets().length, lastActivityAt: last };
+    return { handLive: isHandLive(g), status: meta.status, sockets: this.ctx.getWebSockets().length, lastActivityAt: last };
   }
 
   /** Admin debug snapshot: full server state with live hole cards and the deck hidden. */
@@ -195,7 +197,7 @@ export class TableDO extends DurableObject<Env> {
           ...m, options: { ...defaultOptions(), ...(m.options ?? {}) }, hud: m.hud ?? {}, cur: m.cur ?? null, unlocked: m.unlocked ?? [],
           votes: m.votes ?? {}, rabbitShown: m.rabbitShown ?? null, pendingConfig: m.pendingConfig ?? null, autoSatOut: m.autoSatOut ?? [],
           flags: normalizeFlags(m.flags), ghostVote: m.ghostVote ?? null, lastTaunt: m.lastTaunt ?? {},
-          gameChoice: m.gameChoice ?? null, gameChosenFor: m.gameChosenFor ?? 0, orbitLeft: m.orbitLeft ?? 0, firstButton: m.firstButton ?? null,
+          gameChoice: m.gameChoice ?? null, gameChosenFor: m.gameChosenFor ?? 0, lastChooser: m.lastChooser ?? null, orbitLeft: m.orbitLeft ?? 0, firstButton: m.firstButton ?? null,
           lastActions: m.lastActions ?? {}, endPending: m.endPending ?? false, rabbitShownHands: m.rabbitShownHands ?? [], shown: m.shown ?? { hand: 0, seats: [] }, straddlers: m.straddlers ?? [],
         } as Meta;
       }
@@ -247,7 +249,7 @@ export class TableDO extends DurableObject<Env> {
       createdAt: Date.now(), timer: null, rebuyRequests: [], departed: [], logSeq: 0, chatSeq: 0, leaving: [],
       pendingConfig: null, autoSatOut: [], options: defaultOptions(), hud: {}, cur: null, unlocked: [], votes: {}, rabbitShown: null,
       flags: args.flags ? normalizeFlags(args.flags) : defaultFlags(),
-      ghostVote: null, lastTaunt: {}, gameChoice: null, gameChosenFor: 0, orbitLeft: 0, firstButton: null, lastActions: {}, endPending: false, rabbitShownHands: [], shown: { hand: 0, seats: [] }, straddlers: [],
+      ghostVote: null, lastTaunt: {}, gameChoice: null, gameChosenFor: 0, lastChooser: null, orbitLeft: 0, firstButton: null, lastActions: {}, endPending: false, rabbitShownHands: [], shown: { hand: 0, seats: [] }, straddlers: [],
     };
     this.game = createGame(validateConfig(args.config));
     this.log("system", `Table created by ${args.hostName}.`);
@@ -513,12 +515,12 @@ export class TableDO extends DurableObject<Env> {
       case "chooseGame": {
         const g = this.game!;
         const choice = meta.gameChoice;
-        if (!choice) throw new EngineError("no_choice", "Nobody is picking a game right now");
-        if (choice.chooserId !== att.userId) throw new EngineError("not_dealer", "Only the dealer picks the game");
+        if (!choice || choice.forHand !== g.handCount + 1) throw new EngineError("no_choice", "Nobody is picking a game right now");
+        if (choice.chooserId !== att.userId) throw new EngineError("not_dealer", "Only the next dealer picks the game");
         if (!choice.options.includes(msg.variant)) throw new EngineError("bad_game", "That game does not fit this table right now");
-        this.finishGameChoice(msg.variant, "picked");
-        if (meta.status === "running" && !isHandLive(g)) this.beginHand();
-        else this.afterChange();
+        choice.picked = msg.variant;
+        this.slog("info", "dealer.pick", { chooser: choice.chooser, variant: msg.variant, forHand: choice.forHand });
+        this.afterChange();
         return;
       }
 
@@ -832,7 +834,7 @@ export class TableDO extends DurableObject<Env> {
       this.syncTableStatus();
       return;
     }
-    if (this.openGameChoice()) return;
+    this.applyGameChoice();
     let res;
     try {
       const straddleSeats = meta.flags.straddle
@@ -858,6 +860,7 @@ export class TableDO extends DurableObject<Env> {
       players: nh.players.map((p) => p.seat), ghost: nh.ghost ? nh.ghost.stake : null, seats: this.seatsSnapshot(),
     });
     this.applyStep(res.state, res.events);
+    if (this.openGameChoice()) this.afterChange();
   }
 
   /** Dealer's choice is on for this table and switched on by the operator. */
@@ -874,51 +877,53 @@ export class TableDO extends DurableObject<Env> {
   }
 
   /**
-   * Dealer's choice: before dealing, ask the player about to get the button to pick the game.
-   * Returns true when a pick is now open (the deal waits for it, or for the timer).
+   * Dealer's choice: once a hand is under way, let the player who gets the button next pick the next game
+   * (hand mode: every hand; orbit mode: when the orbit is about to end). The current hand never waits on it.
+   * Returns true when a pick was opened.
    */
   private openGameChoice(): boolean {
     const g = this.game!;
     const meta = this.meta!;
-    const next = g.handCount + 1;
-    if (!this.dealersChoiceOn() || meta.gameChosenFor === next) return false;
+    const forHand = g.handCount + 1;
+    if (!this.dealersChoiceOn() || meta.gameChoice?.forHand === forHand) return false;
     if (g.config.dealersChoice === "orbit" && meta.orbitLeft > 0) return false;
+    // per hand: whoever gets the button next. Per orbit: the player after the last picker
+    // (an orbit brings the button back to the same player, so following the button would never rotate).
     let chooser = nextButtonSeat(g);
-    if (chooser === null) {
+    if (g.config.dealersChoice === "orbit" && meta.lastChooser !== null) {
       const seats = participants(g).map((p) => p.seat);
-      chooser = meta.firstButton !== null && seats.includes(meta.firstButton) ? meta.firstButton : seats[cryptoRng(seats.length)]!;
-      meta.firstButton = chooser;
+      chooser = seats.find((x) => x > meta.lastChooser!) ?? seats[0] ?? null;
     }
-    const seat = g.seats[chooser];
+    const seat = chooser !== null ? g.seats[chooser] : null;
     const options = this.gameOptions();
-    if (!seat || seat.disconnected || options.length < 2) {
-      this.finishGameChoice(null, "skipped");
-      return false;
-    }
-    meta.gameChoice = { chooser, chooserId: seat.playerId, options };
-    this.log("system", `🎲 Dealer's choice: ${seat.name} picks the game${g.config.dealersChoice === "orbit" ? " for the next orbit" : ""}.`);
-    this.slog("info", "dealer.choiceOpen", { chooser, user: seat.name, options, mode: g.config.dealersChoice });
-    this.afterChange();
+    if (chooser === null || !seat || options.length < 2) return false;
+    meta.gameChoice = { chooser, chooserId: seat.playerId, options, forHand, picked: null };
+    this.log("system", `🎲 ${seat.name} picks the next game${g.config.dealersChoice === "orbit" ? " for the next orbit" : ""}.`);
+    this.slog("info", "dealer.choiceOpen", { chooser, user: seat.name, options, mode: g.config.dealersChoice, forHand });
     return true;
   }
 
-  /** Close the pick: switch the game (or keep it), then deal. */
-  private finishGameChoice(variant: Variant | null, how: "picked" | "timeout" | "skipped") {
+  /** Right before a deal: switch to the next dealer's pick, if they made one (otherwise the game stays). */
+  private applyGameChoice() {
     const g = this.game!;
     const meta = this.meta!;
-    const chooser = meta.gameChoice ? g.seats[meta.gameChoice.chooser] : null;
+    const choice = meta.gameChoice;
+    if (!choice) return;
     meta.gameChoice = null;
-    meta.gameChosenFor = g.handCount + 1;
+    if (!this.dealersChoiceOn() || choice.forHand !== g.handCount + 1) return;
+    meta.lastChooser = choice.chooser;
+    const chooser = g.seats[choice.chooser];
+    const picked = choice.picked && this.gameOptions().includes(choice.picked) ? choice.picked : null;
     if (g.config.dealersChoice === "orbit") meta.orbitLeft = participants(g).length;
-    if (variant && variant !== g.config.variant) {
-      g.config = { ...g.config, variant };
-      void accounts(this.env).updateTable(meta.code, { variant });
+    const span = g.config.dealersChoice === "orbit" ? ` for ${meta.orbitLeft} hands` : "";
+    if (picked && picked !== g.config.variant) {
+      g.config = { ...g.config, variant: picked };
+      void accounts(this.env).updateTable(meta.code, { variant: picked });
     }
     const name = VARIANTS[g.config.variant].name;
-    const span = g.config.dealersChoice === "orbit" ? ` for ${meta.orbitLeft} hands` : "";
-    if (how === "picked") this.log("system", `🎲 ${chooser?.name ?? "The dealer"} picks ${name}${span}.`);
-    else if (how === "timeout") this.log("system", `🎲 No pick in time. ${name} it is${span}.`);
-    this.slog("info", "dealer.choiceDone", { how, variant: g.config.variant, orbitLeft: meta.orbitLeft });
+    if (picked) this.log("system", `🎲 ${chooser?.playerId === choice.chooserId ? chooser.name : "The dealer"} picks ${name}${span}.`);
+    else this.log("system", `🎲 No pick. Staying on ${name}${span}.`);
+    this.slog("info", "dealer.choiceDone", { how: picked ? "picked" : "kept", variant: g.config.variant, orbitLeft: meta.orbitLeft });
   }
 
   /** Commit a new engine state, log events, schedule the next timer, persist, and broadcast. */
@@ -1009,8 +1014,6 @@ export class TableDO extends DurableObject<Env> {
       timer = { kind: "runChoice", at: now + RUN_CHOICE_MS, durationMs: RUN_CHOICE_MS };
     } else if (h && h.phase === "runout") {
       timer = { kind: "runout", at: now + RUNOUT_PAUSE_MS, durationMs: RUNOUT_PAUSE_MS };
-    } else if (meta.gameChoice && meta.status === "running") {
-      timer = { kind: "chooseGame", at: now + GAME_CHOICE_MS, durationMs: GAME_CHOICE_MS };
     } else if ((!h || h.phase === "showdown") && meta.status === "running" && canStartHand(g)) {
       const contested = !!h?.result && Object.keys(h.result.hands).length > 0;
       const d = (contested ? NEXT_HAND_DELAY_SHOWDOWN_MS : NEXT_HAND_DELAY_MS) + (h?.result?.badBeat && meta.flags.badBeat ? BAD_BEAT_EXTRA_MS : 0);
@@ -1019,7 +1022,7 @@ export class TableDO extends DurableObject<Env> {
     // keep an existing timer of the same kind for the same action step (don't reset the clock on unrelated changes)
     const seq = h?.actionSeq ?? -1;
     const prevKey = meta.timerKey;
-    const key = timer ? `${timer.kind}:${h?.number ?? 0}:${seq}:${meta.gameChosenFor}` : null;
+    const key = timer ? `${timer.kind}:${h?.number ?? 0}:${seq}` : null;
     if (timer && prevKey === key && meta.timer && meta.timer.at > now) {
       return; // same step, timer already running
     }
@@ -1047,10 +1050,6 @@ export class TableDO extends DurableObject<Env> {
       } else if (kind === "discard" && h && h.phase === "discard") {
         const res = timeout(g);
         this.applyStep(res.state, res.events);
-      } else if (kind === "chooseGame" && meta.gameChoice && meta.status === "running") {
-        this.finishGameChoice(null, "timeout");
-        if (!isHandLive(g)) this.beginHand();
-        else this.afterChange();
       } else if (kind === "runChoice" && h && h.phase === "runChoice") {
         const res = timeout(g);
         this.applyStep(res.state, res.events);
@@ -1347,7 +1346,9 @@ export class TableDO extends DurableObject<Env> {
       dealerChoice: this.dealersChoiceOn()
         ? {
             mode: g.config.dealersChoice as "hand" | "orbit",
-            picking: meta.gameChoice ? { chooser: meta.gameChoice.chooser, options: [...meta.gameChoice.options] } : null,
+            picking: meta.gameChoice && meta.gameChoice.forHand === g.handCount + 1
+              ? { chooser: meta.gameChoice.chooser, options: [...meta.gameChoice.options], picked: meta.gameChoice.picked }
+              : null,
             handsLeft: g.config.dealersChoice === "orbit" ? meta.orbitLeft : null,
           }
         : null,

@@ -480,14 +480,17 @@ assert(A.errors.every((e) => e.code === "disabled" || e.code === "taunt_cooldown
   send(E, { t: "sit", seat: 0, buyIn: 200 }); send(F, { t: "sit", seat: 1, buyIn: 200 });
   await wait(300); send(E, { t: "start" }); await wait(500);
   const pick = E.view.dealerChoice?.picking;
-  assert(pick && E.view.hand === null && pick.options.includes("plo"), "dealer's choice: the first dealer is asked to pick before the deal");
+  assert(E.view.hand?.number === 1 && E.view.hand.variant === "nlhe", "dealer's choice never holds up the deal: hand 1 plays the current game");
+  assert(pick && pick.options.includes("plo") && pick.picked === null && pick.chooser !== E.view.hand.button, "the next dealer gets the pick while hand 1 plays");
+  assert(!pick.options.includes("pineapple") && pick.options.includes("crazy-pineapple"), "only one Pineapple is offered");
   const dealer = pick.chooser === 0 ? E : F, other = dealer === E ? F : E;
   send(other, { t: "chooseGame", variant: "plo" });
   await wait(300);
-  assert(other.errors.some((e) => e.code === "not_dealer"), "only the dealer can pick the game");
-  send(dealer, { t: "chooseGame", variant: "plo" });
+  assert(other.errors.some((e) => e.code === "not_dealer"), "only the next dealer can pick the game");
+  send(dealer, { t: "chooseGame", variant: "plo5" });
+  send(dealer, { t: "chooseGame", variant: "plo" }); // can change their mind until the deal
   await wait(500);
-  assert(E.view.hand?.number === 1 && E.view.hand.variant === "plo" && E.view.hand.button === pick.chooser, "picked game is dealt and the picker has the button");
+  assert(other.view.dealerChoice.picking.picked === "plo" && other.view.hand.variant === "nlhe", "the pick is shown to everyone and waits for the next hand");
   // both all-in preflop, then agree to run it twice
   for (let i = 0; i < 6 && E.view.hand.phase === "betting"; i++) {
     const h = E.view.hand; const c = h.actor === 0 ? E : F;
@@ -503,12 +506,14 @@ assert(A.errors.every((e) => e.code === "disabled" || e.code === "taunt_cooldown
   assert(E.view.hand.phase === "showdown" && E.view.hand.boards.every((b) => b.length === 5), "both runs dealt to the river");
   assert(E.view.seats.filter(Boolean).reduce((x, s) => x + s.stack, 0) === 400, "chips conserved after running it twice");
   if (E.view.seats.every((s) => !s || s.stack > 0)) {
-    for (let i = 0; i < 20 && !E.view.dealerChoice?.picking; i++) await wait(500);
+    for (let i = 0; i < 30 && E.view.hand?.number !== 2; i++) await wait(500);
+    assert(E.view.hand?.number === 2 && E.view.hand.variant === "plo" && E.view.hand.button === pick.chooser, "hand 2 deals the pick, with the picker on the button");
     const p2 = E.view.dealerChoice?.picking;
-    assert(p2 && p2.chooser !== pick.chooser, "next hand: the new dealer picks");
-    send(p2.chooser === 0 ? E : F, { t: "chooseGame", variant: "nlhe" });
-    await wait(500);
-    assert(E.view.hand?.number === 2 && E.view.hand.variant === "nlhe", "second pick switches the game back");
+    assert(p2 && p2.chooser !== pick.chooser && p2.picked === null, "hand 2: the following dealer gets the next pick");
+    // nobody picks: the game stays PLO
+    const h2 = E.view.hand; send(h2.actor === 0 ? E : F, { t: "action", seq: h2.actionSeq, action: { type: "fold" } });
+    for (let i = 0; i < 30 && E.view.hand?.number !== 3; i++) await wait(500);
+    assert(E.view.hand?.number === 3 && E.view.hand.variant === "plo", "no pick keeps the current game");
   } else console.log("skip second pick (a player busted)");
   assert(E.errors.filter((e) => e.code !== "not_dealer").length === 0 && F.errors.filter((e) => e.code !== "not_dealer").length === 0, "dealer's choice section had no unexpected socket errors");
   E.ws.close(); F.ws.close();
