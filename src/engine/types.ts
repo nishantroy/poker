@@ -137,6 +137,8 @@ export interface Hand {
   /** Index of the board knocked out by Squid Game, once the river is dealt. */
   eliminated: number | null;
   ghost: HandGhost | null;
+  /** Chips the ghost still held after it was voted off: dead money in this hand's main pot (the ghost is not dealt in). */
+  deadMoney?: number;
   players: HandPlayer[];
   button: number;
   smallBlindSeat: number;
@@ -206,6 +208,7 @@ export type GameEvent =
   | { type: "returned"; seat: number; amount: number }
   | { type: "runChoiceOpened"; max: number }
   | { type: "superRiver"; boards: Card[][] }
+  | { type: "deadMoney"; amount: number }
   | { type: "runsChosen"; runs: number }
   | { type: "handEnded"; handNumber: number }
   | { type: "timeout"; seat: number };

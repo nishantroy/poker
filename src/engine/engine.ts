@@ -58,10 +58,20 @@ export function removePlayer(state: GameState, seat: number): GameState {
   return s;
 }
 
-/** Turn the ghost player on or off (from the next hand). It cannot be turned off while it holds chips. */
+/** Chips the ghost owns: its bankroll plus its stake riding in a live hand. */
+export function ghostChips(state: GameState): number {
+  const live = state.hand && state.hand.phase !== "showdown" ? state.hand.ghost?.stake ?? 0 : 0;
+  return state.ghost.stack + live;
+}
+
+/**
+ * Turn the ghost player on or off (from the next hand). It cannot be turned off while it holds chips,
+ * including a stake in the live hand. Turned off mid-hand with no stake, it still plays that hand out; anything
+ * it wins becomes dead money in the next hand's main pot (see `startHand`).
+ */
 export function setGhost(state: GameState, enabled: boolean): GameState {
   const s = structuredClone(state);
-  if (!enabled && s.ghost.stack > 0) throw new EngineError("ghost_has_chips", "The ghost still has chips; beat it at showdown first");
+  if (!enabled && ghostChips(s) > 0) throw new EngineError("ghost_has_chips", "The ghost still has chips; beat it at showdown first");
   s.ghost.enabled = enabled;
   return s;
 }
@@ -269,6 +279,12 @@ export function startHand(state: GameState, rng: Rng = cryptoRng, opts: StartOpt
     hand.ghost = { hole, discarded: [], stake: s.ghost.stack, revealed: false };
     s.ghost.stack = 0;
     events.push({ type: "ghostDealt", stake: hand.ghost.stake });
+  }
+  if (!hand.ghost && !s.ghost.enabled && s.ghost.stack > 0) {
+    // the ghost was voted off but still won chips (in the hand it was voted off during): they go into this pot
+    hand.deadMoney = s.ghost.stack;
+    s.ghost.stack = 0;
+    events.push({ type: "deadMoney", amount: hand.deadMoney });
   }
   for (const seat of parts) seat.handsPlayed += 1;
 
@@ -774,9 +790,10 @@ function showdown(s: GameState, hand: Hand, events: GameEvent[]) {
   const ghost = hand.ghost;
   // The ghost only competes for the main pot, and only at a real showdown.
   const ghostCompetes = !!ghost && contested;
-  if (ghost && ghost.stake > 0) {
+  const dead = (ghost?.stake ?? 0) + (hand.deadMoney ?? 0);
+  if (dead > 0) {
     if (pots.length === 0) pots.push({ amount: 0, eligible: live.map((p) => p.seat) });
-    pots[0]!.amount += ghost.stake;
+    pots[0]!.amount += dead;
   }
 
   // Donk'em: the super river comes out (no betting) before a contested showdown
@@ -832,7 +849,7 @@ function showdown(s: GameState, hand: Hand, events: GameEvent[]) {
       const seat = elig[0] ?? live[0]!.seat;
       const own = hand.players.find((p) => p.seat === seat)!;
       // An uncontested pot that only this player funded is a returned bet, not a win.
-      const returned = pot.eligible.length === 1 && hand.players.every((p) => p === own || p.totalBet < own.totalBet) && !(ghost && ghost.stake > 0 && potIndex === 0);
+      const returned = pot.eligible.length === 1 && hand.players.every((p) => p === own || p.totalBet < own.totalBet) && !(dead > 0 && potIndex === 0);
       pr.winners.push({ seat, amount: pot.amount, handName: result.hands[seat]?.name });
       if (returned && contested) events.push({ type: "returned", seat, amount: pot.amount });
       else events.push({ type: "potAwarded", seat, amount: pot.amount, potIndex, handName: result.hands[seat]?.name });
@@ -882,7 +899,7 @@ function showdown(s: GameState, hand: Hand, events: GameEvent[]) {
   });
 
   // pay out
-  const total = potTotal(hand) + (ghost?.stake ?? 0);
+  const total = potTotal(hand) + dead;
   for (const p of hand.players) result.net[p.seat] = -p.totalBet;
   let ghostWon = 0;
   for (const pr of result.pots) {

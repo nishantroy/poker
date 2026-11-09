@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import {
-  EngineError, GHOST_SEAT, VARIANTS, VARIANT_IDS, riverBoardSize, advance, applyAction, boardsThatFit, canStartHand, chooseRuns, cryptoRng, nextButtonSeat, computePots, createGame, forfeit, getLimits, isHandLive,
+  EngineError, GHOST_SEAT, VARIANTS, VARIANT_IDS, riverBoardSize, advance, applyAction, boardsThatFit, ghostChips, canStartHand, chooseRuns, cryptoRng, nextButtonSeat, computePots, createGame, forfeit, getLimits, isHandLive,
   participants, rabbitBoards, removePlayer, seatPlayer, setGhost, startHand, timeout,
   type GameEvent, type GameState, type TableConfig, type Variant,
 } from "@engine/index";
@@ -727,7 +727,7 @@ export class TableDO extends DurableObject<Env> {
         if (!mine) throw new EngineError("not_seated", "Only seated players can vote on the ghost");
         const on = !!msg.on;
         if (on === g.ghost.enabled) return;
-        if (!on && g.ghost.stack > 0) throw new EngineError("ghost_has_chips", "The ghost still has chips; beat it at showdown first");
+        if (!on && ghostChips(g) > 0) throw new EngineError("ghost_has_chips", "The ghost still has chips; beat it at showdown first");
         const seated = g.seats.filter((s): s is NonNullable<typeof s> => !!s);
         const needed = Math.floor(seated.length / 2) + 1;
         if (!meta.ghostVote || meta.ghostVote.on !== on) meta.ghostVote = { on, voters: [] };
@@ -736,7 +736,7 @@ export class TableDO extends DurableObject<Env> {
         if (count >= needed) {
           this.game = setGhost(g, on);
           meta.ghostVote = null;
-          this.log("system", on ? `👻 The ghost player joins${isHandLive(g) ? " from the next hand" : ""}. It never bets, always sees showdown, and only wins there.` : "The ghost player leaves the table.");
+          this.log("system", on ? `👻 The ghost player joins${isHandLive(g) ? " from the next hand" : ""}. It never bets, always sees showdown, and only wins there.` : isHandLive(g) && g.hand?.ghost ? "The ghost player leaves after this hand. Anything it wins goes into the next pot." : "The ghost player leaves the table.");
         } else {
           this.log("system", `${att.name} voted to turn the ghost ${on ? "on" : "off"} (${count}/${needed}).`);
         }
@@ -1208,6 +1208,7 @@ export class TableDO extends DurableObject<Env> {
       const h = g.hand!;
       for (const p of h.players) g.seats[p.seat]!.stack += p.totalBet;
       if (h.ghost) g.ghost.stack += h.ghost.stake;
+      if (h.deadMoney) g.ghost.stack += h.deadMoney; // back to the ghost's bankroll, split below
       h.phase = "showdown";
       h.actor = null;
       h.pendingDiscard = [];
@@ -1316,7 +1317,7 @@ export class TableDO extends DurableObject<Env> {
     }
     const hand = h
       ? {
-          number: h.number, variant: h.variant, street: h.street, phase: h.phase, boards: h.boards.map((b) => [...b]), eliminated: h.eliminated, ghost: ghostView, actor: h.actor,
+          number: h.number, variant: h.variant, street: h.street, phase: h.phase, boards: h.boards.map((b) => [...b]), eliminated: h.eliminated, ghost: ghostView, deadMoney: h.deadMoney ?? 0, actor: h.actor,
           currentBet: h.currentBet, minRaise: h.minRaise, pot: h.players.reduce((a, p) => a + p.totalBet, 0),
           pots: computePots(h.players.map((p) => ({ ...p, totalBet: p.totalBet - p.streetBet }))),
           pendingDiscard: [...h.pendingDiscard], result: h.result && !meta.flags.badBeat ? { ...h.result, badBeat: null } : h.result, actionSeq: h.actionSeq, button: h.button,
@@ -1457,6 +1458,9 @@ export class TableDO extends DurableObject<Env> {
           break;
         case "boardEliminated":
           this.log("street", `🦑 Board ${e.board + 1} is eliminated (lowest river: ${e.river}).`);
+          break;
+        case "deadMoney":
+          this.log("system", `👻 The ghost's leftover ${e.amount} goes into this pot as dead money.`);
           break;
         case "ghostDealt":
           this.log("system", e.stake > 0 ? `👻 The ghost is dealt in with ${e.stake} dead money in the main pot.` : "👻 The ghost is dealt in.");

@@ -165,6 +165,7 @@ export const HOUSE_RULES: HouseRule[] = [
       "Voted in by a majority. The ghost is dealt in every hand, never bets, and can only win at showdown.",
       "It only plays for the main pot. If everyone else folds to one player, the ghost loses.",
       "When it wins, its stack rides as dead money in the next main pot until someone beats it.",
+      "It can only be voted off once it has no chips. Voted off mid-hand, it plays that hand out, and anything it wins goes into the next main pot as dead money.",
       "If the session ends while the ghost holds chips, they are split equally between the players still seated.",
     ],
   },

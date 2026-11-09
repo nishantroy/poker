@@ -98,6 +98,8 @@ export interface PublicHand {
   eliminated: number | null;
   /** The ghost player's hand this round, when one was dealt in. */
   ghost: PublicGhost | null;
+  /** Chips a voted-off ghost left behind, riding as dead money in the main pot. */
+  deadMoney: number;
   actor: number | null;
   currentBet: number;
   minRaise: number;

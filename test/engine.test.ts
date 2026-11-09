@@ -459,6 +459,40 @@ describe("ghost player", () => {
     expect(r.state.ghost.stack).toBe(200);
     expect(stacks(r.state)).toEqual([1800, 200, 0]);
   });
+  it("cannot be voted off while its stake rides in a live hand", () => {
+    let s = setGhost(table([1000, 1000, 1000]), true);
+    s.ghost.stack = 50;
+    s = startRigged(s, 0).state;
+    expect(s.ghost.stack).toBe(0);
+    expect(() => setGhost(s, false)).toThrow(/still has chips/);
+  });
+  it("voted off mid-hand with no stake: what it wins becomes dead money in the next pot", () => {
+    let s = setGhost(table([1000, 1000]), true);
+    s = startRigged(s, 0, "2h 3h 2s 3s Ah Ad  7c 8d Tc Qs Kd").state;
+    s = setGhost(s, false); // no stake yet, so the vote goes through; the ghost still plays this hand
+    s = act(s, 0, "allin").state;
+    s = act(s, 1, "call").state;
+    s = advance(s).state; s = advance(s).state; s = advance(s).state;
+    s = advance(s).state;
+    expect(s.hand!.result!.ghost!.won).toBe(2000);
+    expect(s.ghost.enabled).toBe(false);
+    expect(s.ghost.stack).toBe(2000);
+    // top the players up and deal: no ghost, its chips go into the main pot
+    s.seats[0]!.stack = 500;
+    s.seats[1]!.stack = 500;
+    const r0 = startHand(s);
+    s = r0.state;
+    expect(s.hand!.ghost).toBeNull();
+    expect(s.hand!.deadMoney).toBe(2000);
+    expect(s.ghost.stack).toBe(0);
+    expect(r0.events.some((e) => e.type === "deadMoney" && e.amount === 2000)).toBe(true);
+    const actor = s.hand!.actor!;
+    const r = act(s, actor, "fold");
+    expect(r.state.hand!.phase).toBe("showdown");
+    expect(stacks(r.state).reduce((a, b) => a + b, 0) + r.state.ghost.stack).toBe(3000);
+    expect(r.state.ghost.stack).toBe(0);
+    expect(Math.max(...stacks(r.state))).toBeGreaterThan(2000);
+  });
   it("sits out a hand that has no room for its cards", () => {
     let s = setGhost(table([500, 500, 500, 500, 500, 500, 500], { variant: "plo6" }), true);
     s.ghost.stack = 30;

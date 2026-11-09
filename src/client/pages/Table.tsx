@@ -356,6 +356,7 @@ export function TablePage({ code }: { code: string }) {
                     <span key={i} className="pill num">{i === 0 ? "main" : `side ${i}`} {fmtChips(p.amount)}</span>
                   ))}
                   {ghost && ghost.stake > 0 && <span className="pill num inline-flex items-center gap-1"><Ghost size={11} aria-hidden="true" /> {fmtChips(ghost.stake)}</span>}
+                  {hand.deadMoney > 0 && <span className="pill num inline-flex items-center gap-1" title="The ghost's leftover chips, dead money in the main pot"><Ghost size={11} aria-hidden="true" /> {fmtChips(hand.deadMoney)} dead</span>}
                 </div>
                 <div className={`flex flex-col ${boardCount > 1 ? "gap-1" : "gap-1.5"}`}>
                   {hand.boards.map((board, bi) => {
