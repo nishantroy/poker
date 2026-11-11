@@ -148,6 +148,13 @@ describe("tournament setup", () => {
     expect(validateTournament({ buyIn: 1e12, levelMs: 1e12, payouts: "nope" })).toEqual({ buyIn: TOURNEY_LIMITS.maxBuyIn, levelMs: TOURNEY_LIMITS.maxLevelMs, payouts: "auto" });
     expect(validateTournament({ buyIn: 12.9, levelMs: "120000" })).toEqual({ buyIn: 12, levelMs: 120_000, payouts: "auto" });
   });
+
+  it("keeps the current setup for fields a change leaves out or garbles", () => {
+    const now = { buyIn: 50, levelMs: 600_000, payouts: "winner" } as const;
+    expect(validateTournament({}, now)).toEqual(now);
+    expect(validateTournament({ buyIn: "abc", levelMs: null, payouts: 7 }, now)).toEqual(now);
+    expect(validateTournament({ buyIn: 5, payouts: "auto" }, now)).toEqual({ buyIn: 5, levelMs: 600_000, payouts: "auto" });
+  });
   it("names places", () => {
     expect([1, 2, 3, 4, 11, 12, 13, 21, 22].map(ordinal)).toEqual(["1st", "2nd", "3rd", "4th", "11th", "12th", "13th", "21st", "22nd"]);
   });

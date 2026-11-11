@@ -26,11 +26,14 @@ export function defaultTournament(): TournamentSetup {
   return { buyIn: 20, levelMs: 5 * 60_000, payouts: "auto" };
 }
 
-/** Clean up an untrusted tournament setup. Returns null when the input is not a tournament at all. */
-export function validateTournament(input: unknown): TournamentSetup | null {
+/**
+ * Clean up an untrusted tournament setup. Returns null when the input is not a tournament at all.
+ * Fields that are missing or make no sense fall back to `base` (the defaults, or the setup being changed).
+ */
+export function validateTournament(input: unknown, base: TournamentSetup = defaultTournament()): TournamentSetup | null {
   if (typeof input !== "object" || !input) return null;
   const o = input as Record<string, unknown>;
-  const d = defaultTournament();
+  const d = base;
   const int = (v: unknown, lo: number, hi: number, dflt: number) => {
     const n = typeof v === "number" ? Math.floor(v) : typeof v === "string" ? parseInt(v, 10) : NaN;
     return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : dflt;
@@ -38,7 +41,7 @@ export function validateTournament(input: unknown): TournamentSetup | null {
   return {
     buyIn: int(o.buyIn, 0, TOURNEY_LIMITS.maxBuyIn, d.buyIn),
     levelMs: int(o.levelMs, TOURNEY_LIMITS.minLevelMs, TOURNEY_LIMITS.maxLevelMs, d.levelMs),
-    payouts: o.payouts === "winner" ? "winner" : "auto",
+    payouts: o.payouts === "winner" || o.payouts === "auto" ? o.payouts : d.payouts,
   };
 }
 

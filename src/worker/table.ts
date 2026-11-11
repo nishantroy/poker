@@ -45,6 +45,8 @@ interface Tourney extends TournamentSetup {
   away: Record<string, "self" | "auto">;
   /** One player has every chip. */
   over: boolean;
+  /** The table paused itself because everyone was away. The first player back starts it again (`wakeTourney`). */
+  allAway?: boolean;
 }
 
 /** Table settings a tournament never uses: its blinds come from the level clock. */
@@ -383,7 +385,7 @@ export class TableDO extends DurableObject<Env> {
           this.log("system", `${seat.name} is back.`);
         }
       }
-      this.afterChange();
+      if (!this.wakeTourney()) this.afterChange();
     } else {
       this.sendState(server);
     }
@@ -550,7 +552,7 @@ export class TableDO extends DurableObject<Env> {
         if (!seat) throw new EngineError("not_seated", "You are not seated");
         if (this.liveTourney()) {
           this.comeBack(seat);
-          this.afterChange();
+          if (!this.wakeTourney()) this.afterChange();
           return;
         }
         seat.status = "active";
@@ -674,6 +676,7 @@ export class TableDO extends DurableObject<Env> {
           return;
         }
         meta.status = "running";
+        if (t) t.allAway = false;
         this.log("system", t ? "Tournament resumed." : "Game started.");
         const hostSeat = this.seatOf(att.userId);
         if (hostSeat) this.comeBack(hostSeat); // the host is clearly here
@@ -697,6 +700,7 @@ export class TableDO extends DurableObject<Env> {
         requireHost();
         if (meta.status !== "paused") return;
         meta.status = "running";
+        if (meta.tourney) meta.tourney.allAway = false;
         this.log("system", meta.tourney ? "Tournament resumed." : "Game resumed.");
         const hostSeat = this.seatOf(att.userId);
         if (hostSeat) this.comeBack(hostSeat); // the host is clearly here
@@ -759,7 +763,7 @@ export class TableDO extends DurableObject<Env> {
         if (!t) throw new EngineError("not_tournament", "This is not a tournament table");
         if (t.startedAt !== null) throw new EngineError("tournament_started", "The tournament has already started");
         const patch = typeof msg.patch === "object" && msg.patch ? msg.patch : {};
-        const next = validateTournament({ buyIn: t.buyIn, levelMs: t.levelMs, payouts: t.payouts, ...patch })!;
+        const next = validateTournament(patch, { buyIn: t.buyIn, levelMs: t.levelMs, payouts: t.payouts })!;
         if (next.buyIn === t.buyIn && next.levelMs === t.levelMs && next.payouts === t.payouts) return;
         t.buyIn = next.buyIn;
         t.levelMs = next.levelMs;
@@ -997,7 +1001,8 @@ export class TableDO extends DurableObject<Env> {
     if (!this.dealersChoiceOn() || choice.forHand !== g.handCount + 1) return;
     meta.lastChooser = choice.chooser;
     const chooser = g.seats[choice.chooser];
-    const picked = choice.picked && this.gameOptions().includes(choice.picked) ? choice.picked : null;
+    // a chooser who has left the table since has no say
+    const picked = choice.picked && chooser?.playerId === choice.chooserId && this.gameOptions().includes(choice.picked) ? choice.picked : null;
     if (g.config.dealersChoice === "orbit") meta.orbitLeft = participants(g).length;
     const span = g.config.dealersChoice === "orbit" ? ` for ${meta.orbitLeft} hands` : "";
     if (picked && picked !== g.config.variant) {
@@ -1005,7 +1010,7 @@ export class TableDO extends DurableObject<Env> {
       void accounts(this.env).updateTable(meta.code, { variant: picked });
     }
     const name = VARIANTS[g.config.variant].name;
-    if (picked) this.log("system", `🎲 ${chooser?.playerId === choice.chooserId ? chooser.name : "The dealer"} picks ${name}${span}.`);
+    if (picked) this.log("system", `🎲 ${chooser!.name} picks ${name}${span}.`);
     else this.log("system", `🎲 No pick. Staying on ${name}${span}.`);
     this.slog("info", "dealer.choiceDone", { how: picked ? "picked" : "kept", variant: g.config.variant, orbitLeft: meta.orbitLeft });
   }
@@ -1172,7 +1177,8 @@ export class TableDO extends DurableObject<Env> {
     }
     if (alive.length >= 2 && alive.every((s) => t.away[s.playerId])) {
       meta.status = "paused";
-      this.log("system", "Everyone is away, so the tournament is paused. The host can resume it.");
+      t.allAway = true;
+      this.log("system", "Everyone is away, so the tournament is paused. It carries on as soon as a player is back.");
       this.slog("info", "hand.skip", { reason: "tournament_all_away", seats: this.seatsSnapshot() });
       this.afterChange();
       this.syncTableStatus();
@@ -1250,6 +1256,25 @@ export class TableDO extends DurableObject<Env> {
     this.log("system", `${seat.name} is back.`);
     const h = this.game!.hand;
     if (h && h.phase === "betting" && h.actor === seat.seat) this.meta!.timerKey = undefined;
+    return true;
+  }
+
+  /**
+   * A player is back at a tournament the table paused because everyone was away: carry on without waiting for the host
+   * (who may be knocked out and gone). A pause by the host stays the host's to lift. Returns true if it resumed.
+   */
+  private wakeTourney(): boolean {
+    const t = this.liveTourney();
+    const meta = this.meta!;
+    const g = this.game!;
+    if (!t || !t.allAway || t.over || meta.status !== "paused") return false;
+    if (g.seats.every((s) => !s || t.away[s.playerId])) return false; // still nobody here
+    t.allAway = false;
+    meta.status = "running";
+    this.log("system", "Tournament resumed.");
+    if (!isHandLive(g) && canStartHand(g)) this.beginHand();
+    else this.afterChange();
+    this.syncTableStatus();
     return true;
   }
 

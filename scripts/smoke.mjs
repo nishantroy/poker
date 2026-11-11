@@ -626,7 +626,8 @@ assert(A.errors.every((e) => e.code === "disabled") && B2.errors.length === 0, "
   assert(await play(() => Date.now() - t1 > 66000 && P[0].view.tournament.level >= 1, passive, 100000), "after a minute of play the level goes up");
   assert(T().level === 1 && P[0].view.config.smallBlind === 15 && P[0].view.config.bigBlind === 30 && T().blinds.bb === 30, "level 2 blinds are 15/30");
   assert(P[0].log.some((l) => l.includes("Level 2") && l.includes("15/30")), "the blind rise is announced in the log");
-  assert(P[0].view.seats[3].stack < 1000 && P[0].view.seats[3].away === true, `the away player was blinded down (${P[0].view.seats[3].stack})`);
+  // (their stack is not a reliable sign: a checked-down big blind can win them a pot)
+  assert(P[0].view.seats[3].away === true && P[0].log.some((l) => l.includes(`${d.user.username} posts`)) && P[0].log.some((l) => l === `${d.user.username} folds` || l === `${d.user.username} checks`), `the away player keeps posting blinds and the table checks or folds for them (stack ${P[0].view.seats[3].stack})`);
   assert(!P[0].log.some((l) => l.includes(d.user.username) && l.includes("timed out")), "away players are not announced as timing out");
   send(P[3], { t: "sitIn" }); await wait(400);
   assert(P[0].view.seats[3].away === false, "sitting back in clears away");
@@ -639,6 +640,19 @@ assert(A.errors.every((e) => e.code === "disabled") && B2.errors.length === 0, "
   assert(P[0].view.status === "paused" && T().clockRunning === false && Math.abs(T().levelLeftMs - left1) < 200, "pausing stops the blind clock");
   send(P[0], { t: "resume" }); await wait(500);
   assert(P[0].view.status === "running" && T().clockRunning === true, "resuming starts the clock again");
+
+  // everyone away: the table pauses itself, and the first player back starts it again without the host
+  for (const p of P) send(p, { t: "sitOut" });
+  assert(await play(() => P[0].view.status === "paused", passive, 60000), "with everyone away the tournament pauses itself");
+  await wait(300);
+  assert(T().clockRunning === false && P[0].view.seats.filter(Boolean).every((s) => s.away) && P[0].log.some((l) => l.includes("Everyone is away")), "the all-away pause stops the clock and says why");
+  assert(T().standings.reduce((x, s) => x + s.chips, 0) === 4000, "no chips moved while pausing (4000)");
+  const pausedHand = P[0].view.hand?.number ?? 0;
+  send(P[2], { t: "sitIn" }); await wait(700);
+  assert(P[0].view.status === "running" && T().clockRunning === true && P[0].view.seats[2].away === false && (P[0].view.hand?.number ?? 0) > pausedHand, "a player (not the host) coming back restarts the tournament and deals");
+  for (const i of [0, 1, 3]) send(P[i], { t: "sitIn" });
+  await wait(400);
+  assert(P[0].view.seats.filter(Boolean).every((s) => !s.away), "everyone is back");
 
   // everybody shoves until one player has all the chips
   const done = await play(() => P[0].ended !== null, (lim) => (lim.canRaise ? "allin" : "call"), 240000);
