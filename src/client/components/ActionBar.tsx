@@ -54,7 +54,8 @@ export function ActionBar({ view, onAction }: { view: TableView; onAction: (a: A
     if (!raising) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setRaising(false);
-      else if (e.key === "Enter" && !(e.target instanceof HTMLInputElement && e.target !== amountRef.current) && !(e.target instanceof HTMLTextAreaElement)) {
+      // Enter on a focused button presses that button (Cancel must cancel), and other text boxes keep their Enter
+      else if (e.key === "Enter" && !(e.target instanceof HTMLButtonElement) && !(e.target instanceof HTMLInputElement && e.target !== amountRef.current) && !(e.target instanceof HTMLTextAreaElement)) {
         e.preventDefault();
         confirmRaise();
       }
