@@ -1,7 +1,7 @@
 import { ArrowRight, Crown, LayoutGrid, LogOut, MessageSquarePlus, Plus, Trophy, User, Users } from "lucide-react";
 import { APP_NAME } from "@shared/brand";
 import { useEffect, useState, type FormEvent } from "react";
-import type { LeaderboardRow, TableConfig, TableSummary, Variant } from "@shared/protocol";
+import type { LeaderboardRow, TableConfig, TableSummary, TournamentSetup, Variant } from "@shared/protocol";
 import { defaultConfig } from "@shared/protocol";
 import { VARIANTS, VARIANT_IDS } from "@engine/variants";
 import { api, ApiError } from "../lib/api";
@@ -13,6 +13,8 @@ import { BoardsPicker, RunsPicker, Toggle } from "../components/Panels";
 import { GAME_GUIDE } from "@shared/guide";
 import { DealersChoicePicker } from "../components/Guide";
 import { FeedbackSheet } from "../components/Feedback";
+import { TournamentFields, blindPreview } from "../components/Tournament";
+import { defaultTournament } from "@engine/tournament";
 import { Logo } from "./Login";
 
 export function LobbyPage() {
@@ -99,8 +101,8 @@ export function LobbyPage() {
                 <Link to={`/t/${t.code}`} className="card-surface flex items-center gap-3 p-3.5 hover:bg-surface-2 transition-colors">
                   <span className="pill pill-gold">{VARIANTS[t.variant].short}</span>
                   <div className="flex-1 min-w-0">
-                    <p className="font-bold truncate">{t.name}</p>
-                    <p className="text-xs text-muted">{t.smallBlind}/{t.bigBlind} · {t.hostName} · {timeAgo(t.createdAt)}</p>
+                    <p className="font-bold truncate">{t.tournament && <Trophy size={13} className="inline text-gold -mt-0.5 mr-1" aria-hidden="true" />}{t.name}</p>
+                    <p className="text-xs text-muted">{t.tournament ? "Tournament · " : ""}{t.smallBlind}/{t.bigBlind} · {t.hostName} · {timeAgo(t.createdAt)}</p>
                   </div>
                   <span className={`pill ${t.status === "running" ? "pill-green" : t.status === "paused" ? "pill-red" : ""}`}>{t.status}</span>
                   <span className="text-muted text-sm inline-flex items-center gap-1"><Users size={14} aria-hidden="true" />{t.players}</span>
@@ -176,6 +178,18 @@ function CreateSheet({ open, onClose }: { open: boolean; onClose: () => void }) 
   const { user, flags } = useAuth();
   const [name, setName] = useState("");
   const [cfg, setCfg] = useState<TableConfig>(defaultConfig());
+  const [mode, setMode] = useState<"cash" | "tournament">("cash");
+  const [tour, setTour] = useState<TournamentSetup>(defaultTournament());
+  const isT = mode === "tournament" && flags.tournaments;
+  // a tournament wants deeper stacks than the cash default; switching back restores the cash numbers
+  const pickMode = (m: "cash" | "tournament") => {
+    if (m === mode) return;
+    setMode(m);
+    const d = defaultConfig();
+    setCfg((c) => (m === "tournament"
+      ? { ...c, smallBlind: 10, bigBlind: 20, startingStack: 1500, ante: 0, straddle: false, maxRuns: 1 }
+      : { ...c, smallBlind: d.smallBlind, bigBlind: d.bigBlind, startingStack: d.startingStack, ante: d.ante, straddle: d.straddle, maxRuns: d.maxRuns }));
+  };
   useEffect(() => { if (!flags.variants && cfg.variant !== "nlhe") setCfg((c) => ({ ...c, variant: "nlhe" })); }, [flags.variants, cfg.variant]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -187,7 +201,7 @@ function CreateSheet({ open, onClose }: { open: boolean; onClose: () => void }) 
     setBusy(true);
     setErr(null);
     try {
-      const r = await api.createTable(name.trim() || `${user?.username}'s game`, cfg);
+      const r = await api.createTable(name.trim() || `${user?.username}'s ${isT ? "tournament" : "game"}`, cfg, isT ? tour : undefined);
       navigate(`/t/${r.code}`);
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : "Could not create the table");
@@ -198,8 +212,20 @@ function CreateSheet({ open, onClose }: { open: boolean; onClose: () => void }) 
   return (
     <Sheet open={open} onClose={onClose} title="New table">
       <form onSubmit={submit} className="space-y-4">
+        {flags.tournaments && (
+          <div>
+            <div className="grid grid-cols-2 gap-1 p-1 rounded-xl bg-surface-2" role="group" aria-label="Kind of table">
+              {([["cash", "Cash game"], ["tournament", "Tournament"]] as const).map(([m, l]) => (
+                <button type="button" key={m} aria-pressed={mode === m} onClick={() => pickMode(m)} className={`min-h-[38px] rounded-lg text-sm font-semibold inline-flex items-center justify-center gap-1.5 ${mode === m ? "bg-surface-3" : "text-muted"}`}>
+                  {m === "tournament" && <Trophy size={14} aria-hidden="true" />}{l}
+                </button>
+              ))}
+            </div>
+            <p className="text-xs text-dim mt-1.5">{isT ? "Sit-and-go: everyone pays one buy-in and starts with the same stack. Blinds rise on a clock, there are no rebuys, and the last player with chips wins." : "Sit down and leave whenever you like. Chips are the money."}</p>
+          </div>
+        )}
         <Field label="Table name">
-          <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder={`${user?.username}'s game`} maxLength={40} />
+          <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder={`${user?.username}'s ${isT ? "tournament" : "game"}`} maxLength={40} />
         </Field>
         <div>
           <span className="label">Game</span>
@@ -207,23 +233,25 @@ function CreateSheet({ open, onClose }: { open: boolean; onClose: () => void }) 
           <p className="text-xs text-dim mt-1.5">{VARIANTS[cfg.variant].name} · {GAME_GUIDE[cfg.variant].tagline}</p>
         </div>
         <div className="grid grid-cols-3 gap-3">
-          <Field label="Small blind"><input className="input" type="number" inputMode="numeric" min={1} value={cfg.smallBlind} onChange={num("smallBlind")} /></Field>
-          <Field label="Big blind"><input className="input" type="number" inputMode="numeric" min={1} value={cfg.bigBlind} onChange={num("bigBlind")} /></Field>
-          <Field label="Ante"><input className="input" type="number" inputMode="numeric" min={0} value={cfg.ante} onChange={num("ante")} /></Field>
+          <Field label={isT ? "First small blind" : "Small blind"}><input className="input" type="number" inputMode="numeric" min={1} value={cfg.smallBlind} onChange={num("smallBlind")} /></Field>
+          <Field label={isT ? "First big blind" : "Big blind"}><input className="input" type="number" inputMode="numeric" min={1} value={cfg.bigBlind} onChange={num("bigBlind")} /></Field>
+          {!isT && <Field label="Ante"><input className="input" type="number" inputMode="numeric" min={0} value={cfg.ante} onChange={num("ante")} /></Field>}
         </div>
+        {isT && <p className="text-xs text-dim -mt-2">Blinds: <span className="num">{blindPreview(cfg.smallBlind, cfg.bigBlind)}</span> Players start {cfg.bigBlind > 0 ? Math.round(cfg.startingStack / cfg.bigBlind) : 0} big blinds deep.</p>}
         <div className="grid grid-cols-3 gap-3">
-          <Field label="Buy-in (max)"><input className="input" type="number" inputMode="numeric" min={1} value={cfg.startingStack} onChange={num("startingStack")} /></Field>
+          <Field label={isT ? "Starting stack" : "Buy-in (max)"}><input className="input" type="number" inputMode="numeric" min={1} value={cfg.startingStack} onChange={num("startingStack")} /></Field>
           <Field label="Seats"><input className="input" type="number" inputMode="numeric" min={2} max={8} value={cfg.maxSeats} onChange={num("maxSeats")} /></Field>
           <Field label="Timer (s)"><input className="input" type="number" inputMode="numeric" min={5} max={300} value={Math.round(cfg.actionTimerMs / 1000)} onChange={(e) => set("actionTimerMs", Number(e.target.value) * 1000)} /></Field>
         </div>
+        {isT && <TournamentFields value={tour} onChange={setTour} />}
         {flags.squid && <BoardsPicker boards={cfg.boards} squid={cfg.squid} onChange={(b, sq) => setCfg((c) => ({ ...c, boards: b, squid: sq, redRiver: b > 1 ? false : c.redRiver }))} />}
         {flags.redRiver && cfg.boards === 1 && <Toggle label="Red river" hint="When the river is red, keep dealing until a black card lands. One betting round after. Single board only; never run twice." checked={cfg.redRiver} onChange={(v) => set("redRiver", v)} />}
-        {flags.runItTwice && <RunsPicker value={cfg.maxRuns} onChange={(n) => set("maxRuns", n)} />}
+        {flags.runItTwice && !isT && <RunsPicker value={cfg.maxRuns} onChange={(n) => set("maxRuns", n)} />}
         {flags.shortDeck && <Toggle label="Short deck (6+)" hint={`Removes the 2s through 5s (36 cards). Flush beats full house, trips beat a straight, A-6-7-8-9 is a straight.${VARIANTS[cfg.variant].hiLo ? " Not used for PLO Hi-Lo, which always plays the full deck." : ""}`} checked={cfg.shortDeck} onChange={(v) => set("shortDeck", v)} />}
-        {flags.straddle && <Toggle label="Allow straddles" hint="Under the gun may post 2× the big blind before the deal and act last preflop." checked={cfg.straddle} onChange={(v) => set("straddle", v)} />}
+        {flags.straddle && !isT && <Toggle label="Allow straddles" hint="Under the gun may post 2× the big blind before the deal and act last preflop." checked={cfg.straddle} onChange={(v) => set("straddle", v)} />}
         {flags.dealersChoice && flags.variants && <DealersChoicePicker value={cfg.dealersChoice} onChange={(v) => set("dealersChoice", v)} />}
         {err && <p className="text-sm text-[#ff8b8e]" role="alert">{err}</p>}
-        <button className="btn btn-primary w-full" disabled={busy}>{busy ? "Creating…" : "Open table"}</button>
+        <button className="btn btn-primary w-full" disabled={busy}>{busy ? "Creating…" : isT ? "Open tournament" : "Open table"}</button>
       </form>
     </Sheet>
   );

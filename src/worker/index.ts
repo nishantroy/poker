@@ -2,6 +2,7 @@ import { AccountsDO, AuthError } from "./accounts";
 import { TableDO } from "./table";
 import { type AuthUser, type Env, SESSION_COOKIE, SESSION_TTL_MS, accounts, error, json, randomCode, readCookie } from "./env";
 import { LIMITS, validateConfig } from "@shared/protocol";
+import { validateTournament } from "@engine/index";
 import { type Flags, isFlagName } from "@shared/flags";
 import { errFields, slog } from "./slog";
 
@@ -196,6 +197,9 @@ async function handleApi(req: Request, env: Env, path: string): Promise<Response
       const config = validateConfig(b.config);
       if (!flags.variants) config.variant = "nlhe";
       if (!flags.squid) { config.boards = 1; config.squid = false; }
+      // A tournament is a table with a `tournament` setup; anything else in that field is ignored (cash game).
+      const tournament = validateTournament(b.tournament);
+      if (tournament && !flags.tournaments) return disabled();
       let code = randomCode();
       // extremely unlikely collision guard
       for (let i = 0; i < 3; i++) {
@@ -204,9 +208,9 @@ async function handleApi(req: Request, env: Env, path: string): Promise<Response
         code = randomCode();
       }
       const stub = env.TABLE.get(env.TABLE.idFromName(code));
-      await stub.init({ code, name, hostId: user.id, hostName: user.username, config, flags });
-      slog("info", "table.create", { table: code, user: user.username, config });
-      await acc.registerTable({ code, name, hostId: user.id, hostName: user.username, variant: config.variant, smallBlind: config.smallBlind, bigBlind: config.bigBlind });
+      await stub.init({ code, name, hostId: user.id, hostName: user.username, config, flags, tournament });
+      slog("info", "table.create", { table: code, user: user.username, config, tournament });
+      await acc.registerTable({ code, name, hostId: user.id, hostName: user.username, variant: config.variant, smallBlind: config.smallBlind, bigBlind: config.bigBlind, tournament: !!tournament });
       return json({ code });
     }
     if (path === "/api/tables" && method === "GET") {

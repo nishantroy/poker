@@ -1,6 +1,6 @@
 import { Ghost, Check, Crown, Send, UserX, X } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import type { ChatMessage, ClientMessage, HandRecordView, HandSummary, LogLine, SessionResultRow, TableConfig, TableView } from "@shared/protocol";
+import type { ChatMessage, ClientMessage, HandRecordView, HandSummary, LogLine, SessionResultRow, TableConfig, TableView, TournamentInfo, TournamentSetup } from "@shared/protocol";
 import type { Flags } from "@shared/flags";
 import { TAUNTS } from "@shared/protocol";
 import { HandsList, ReplayView } from "./Replay";
@@ -8,17 +8,35 @@ import { GAME_GUIDE } from "@shared/guide";
 import { DealersChoicePicker } from "./Guide";
 import { FeedbackSheet } from "./Feedback";
 import { VARIANTS } from "@engine/variants";
+import { ordinal } from "@engine/tournament";
+import { TournamentFields } from "./Tournament";
 import { fmtChips, fmtNet } from "../lib/format";
 import { navigate } from "../lib/router";
 import { VariantPicker } from "../pages/Lobby";
 import { Field, Modal, Sheet } from "./ui";
 
-export function SitSheet({ open, seat, config, onClose, onSit }: { open: boolean; seat: number | null; config: TableConfig; onClose: () => void; onSit: (seat: number, buyIn: number) => void }) {
+export function SitSheet({ open, seat, config, tournament, onClose, onSit }: { open: boolean; seat: number | null; config: TableConfig; tournament?: TournamentInfo | null; onClose: () => void; onSit: (seat: number, buyIn: number) => void }) {
   const [buyIn, setBuyIn] = useState(config.startingStack);
   useEffect(() => setBuyIn(config.startingStack), [config.startingStack, open]);
   const min = config.bigBlind;
   const max = config.startingStack;
   const clamp = (v: number) => Math.min(max, Math.max(min, Math.round(v || 0)));
+  if (tournament) {
+    // one fixed entry: everyone pays the same and starts with the same stack
+    return (
+      <Sheet open={open} onClose={onClose} title={`Enter the tournament · seat ${(seat ?? 0) + 1}`}>
+        <div className="space-y-4">
+          <div className="card-surface divide-y divide-border text-sm">
+            <p className="flex justify-between gap-3 px-3 py-2.5"><span className="text-muted">Entry</span><span className="num font-extrabold text-gold-bright">{tournament.buyIn > 0 ? fmtChips(tournament.buyIn) : "Free"}</span></p>
+            <p className="flex justify-between gap-3 px-3 py-2.5"><span className="text-muted">You start with</span><span className="num font-extrabold">{config.startingStack.toLocaleString()} chips</span></p>
+            <p className="flex justify-between gap-3 px-3 py-2.5"><span className="text-muted">Blinds</span><span className="num font-semibold">{fmtChips(config.smallBlind)}/{fmtChips(config.bigBlind)}, up every {Math.round(tournament.levelMs / 60_000)} min</span></p>
+          </div>
+          <p className="text-xs text-muted">{tournament.buyIn > 0 ? "Your entry goes into the prize pool. " : ""}One entry, no rebuys. You can leave your seat until the host starts; after that you play until you're out of chips or you have them all.</p>
+          <button className="btn btn-primary w-full" onClick={() => seat !== null && onSit(seat, config.startingStack)}>Join the tournament</button>
+        </div>
+      </Sheet>
+    );
+  }
   return (
     <Sheet open={open} onClose={onClose} title={`Sit at seat ${(seat ?? 0) + 1}`}>
       <div className="space-y-4">
@@ -47,6 +65,8 @@ export function PlayerMenu({ open, onClose, view, send }: { open: boolean; onClo
   const pending = view.rebuyRequests.find((r) => r.playerId === view.me.userId);
   const act = (m: ClientMessage) => { send(m); onClose(); };
   const [feedback, setFeedback] = useState(false);
+  const t = view.tournament;
+  const myPlace = t?.standings.find((s) => s.userId === view.me.userId)?.place ?? null;
   return (
     <>
     <FeedbackSheet open={feedback} onClose={() => setFeedback(false)} context={{ variant: view.hand?.variant ?? view.config.variant, hand: view.hand?.number }} />
@@ -57,9 +77,26 @@ export function PlayerMenu({ open, onClose, view, send }: { open: boolean; onClo
             <div className="card-surface p-3 flex items-center justify-between">
               <div>
                 <p className="font-bold">{me.name} · seat {me.seat + 1}</p>
-                <p className="text-sm text-muted">Stack <span className="num text-gold-bright font-bold">{me.stack.toLocaleString()}</span> · bought in {me.totalBuyIn.toLocaleString()}{me.pendingAdd ? ` · +${me.pendingAdd} after this hand` : ""}</p>
+                <p className="text-sm text-muted">Stack <span className="num text-gold-bright font-bold">{me.stack.toLocaleString()}</span> · {t ? (t.buyIn > 0 ? `entry ${fmtChips(t.buyIn)}` : "free entry") : `bought in ${me.totalBuyIn.toLocaleString()}`}{me.pendingAdd ? ` · +${me.pendingAdd} after this hand` : ""}</p>
               </div>
             </div>
+            {t ? (
+              !t.started ? (
+                <>
+                  <p className="text-sm text-muted">You're in. The host starts the tournament once everyone has a seat; until then you can still leave.</p>
+                  <button className="btn btn-danger w-full" onClick={() => act({ t: "stand" })}>Leave my seat</button>
+                </>
+              ) : myPlace !== null && myPlace !== 1 ? (
+                <p className="text-sm text-muted">You finished {ordinal(myPlace)}. You can keep watching.</p>
+              ) : t.over ? null : (
+                <>
+                  {me.away
+                    ? <button className="btn btn-green w-full" onClick={() => act({ t: "sitIn" })}>I'm back</button>
+                    : <button className="btn w-full" onClick={() => act({ t: "sitOut" })}>Sit out</button>}
+                  <p className="text-xs text-muted">Nobody leaves a tournament with chips. While you sit out you are still dealt in: your hands are checked or folded at once and your blinds keep going in.</p>
+                </>
+              )
+            ) : (<>
             {me.status === "sittingOut" ? (
               <button className="btn btn-green w-full" onClick={() => act({ t: "sitIn" })}>Deal me back in</button>
             ) : (
@@ -82,9 +119,10 @@ export function PlayerMenu({ open, onClose, view, send }: { open: boolean; onClo
             </div>
             {view.flags.ghost && <GhostVote view={view} send={send} />}
             <button className="btn btn-danger w-full" onClick={() => { if (confirm("Stand up and leave your seat? Your chips are cashed out.")) act({ t: "stand" }); }}>Stand up</button>
+            </>)}
           </>
         ) : (
-          <p className="text-muted text-sm">Tap an empty seat to join the game.</p>
+          <p className="text-muted text-sm">{t?.started && myPlace !== null && myPlace !== 1 ? `You finished ${ordinal(myPlace)}. You can keep watching.` : t?.started ? "This tournament is under way, so the seats are closed. You can watch." : t ? "Tap an empty seat to enter the tournament." : "Tap an empty seat to join the game."}</p>
         )}
         {view.flags.feedback && <button className="btn btn-ghost w-full" onClick={() => { onClose(); setFeedback(true); }}>Send feedback or an idea</button>}
         <button className="btn btn-ghost w-full" onClick={() => navigate("/")}>Back to lobby</button>
@@ -161,7 +199,24 @@ export function BoardsPicker({ boards, squid, onChange }: { boards: number; squi
 export function HostPanel({ open, onClose, view, send }: { open: boolean; onClose: () => void; view: TableView; send: (m: ClientMessage) => void }) {
   const [cfg, setCfg] = useState<TableConfig>(view.config);
   useEffect(() => { if (open) setCfg(view.config); }, [open, view.config]);
-  const dirty = JSON.stringify(cfg) !== JSON.stringify(view.config);
+  const t = view.tournament;
+  const started = !!t?.started;
+  const tourNow: TournamentSetup | null = t ? { buyIn: t.buyIn, levelMs: t.levelMs, payouts: t.payouts } : null;
+  const tourKey = JSON.stringify(tourNow);
+  const [tour, setTour] = useState<TournamentSetup | null>(tourNow);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { if (open) setTour(tourNow); }, [open, tourKey]);
+  const cfgDirty = JSON.stringify(cfg) !== JSON.stringify(view.config);
+  const tourDirty = !!tour && !started && JSON.stringify(tour) !== tourKey;
+  const dirty = cfgDirty || tourDirty;
+  const apply = () => {
+    if (cfgDirty) send({ t: "config", patch: cfg });
+    if (tourDirty && tour) send({ t: "tournament", patch: tour });
+  };
+  const endLabel = view.endPending ? "Ending after this hand" : !t ? "End session" : started ? "End tournament" : "Cancel tournament";
+  const endConfirm = !t ? "End the session for everyone and record results? A hand in progress is played out first."
+    : started ? "End the tournament now? A hand in progress is played out first. Prize money not yet won is split between the players left by chip count."
+    : "Cancel the tournament? Nobody pays and nothing is recorded.";
   const set = <K extends keyof TableConfig>(k: K, v: TableConfig[K]) => setCfg((c) => ({ ...c, [k]: v }));
   const num = (k: keyof TableConfig) => (e: React.ChangeEvent<HTMLInputElement>) => set(k, Number(e.target.value) as never);
   const players = view.seats.filter((s): s is NonNullable<typeof s> => !!s);
@@ -172,10 +227,11 @@ export function HostPanel({ open, onClose, view, send }: { open: boolean; onClos
           {view.status === "running" ? (
             <button className="btn" onClick={() => send({ t: "pause" })}>Pause after this hand</button>
           ) : (
-            <button className="btn btn-green" onClick={() => send({ t: view.status === "paused" ? "resume" : "start" })}>{view.status === "paused" ? "Resume" : "Start game"}</button>
+            <button className="btn btn-green" disabled={!!t && !started && players.length < 2} onClick={() => send({ t: view.status === "paused" ? "resume" : "start" })}>{view.status === "paused" ? "Resume" : t ? "Start tournament" : "Start game"}</button>
           )}
-          <button className="btn btn-danger" disabled={view.endPending} onClick={() => { if (confirm("End the session for everyone and record results? A hand in progress is played out first.")) send({ t: "end" }); }}>{view.endPending ? "Ending after this hand" : "End session"}</button>
+          <button className="btn btn-danger" disabled={view.endPending} onClick={() => { if (confirm(endConfirm)) send({ t: "end" }); }}>{endLabel}</button>
         </div>
+        {t && !started && <p className="text-xs text-muted -mt-2">Seats close when you start: no late entries and no rebuys. {players.length < 2 ? "You need at least 2 players." : `${players.length} players are in.`}</p>}
 
         {view.rebuyRequests.length > 0 && (
           <section>
@@ -196,22 +252,27 @@ export function HostPanel({ open, onClose, view, send }: { open: boolean; onClos
           <h3 className="label">Game settings <span className="normal-case font-normal text-dim">(apply from the next hand)</span></h3>
           <VariantPicker value={cfg.variant} onChange={(v) => set("variant", v)} allowAll={view.flags.variants} />
           <p className="text-xs text-dim">{VARIANTS[cfg.variant].name} · {GAME_GUIDE[cfg.variant].tagline}</p>
-          <div className="grid grid-cols-3 gap-2">
-            <Field label="Small"><input className="input" type="number" inputMode="numeric" min={1} value={cfg.smallBlind} onChange={num("smallBlind")} /></Field>
-            <Field label="Big"><input className="input" type="number" inputMode="numeric" min={1} value={cfg.bigBlind} onChange={num("bigBlind")} /></Field>
-            <Field label="Ante"><input className="input" type="number" inputMode="numeric" min={0} value={cfg.ante} onChange={num("ante")} /></Field>
-          </div>
+          {started ? (
+            <p className="text-xs text-muted">The blinds follow the level clock and the stacks are set, so they can't be changed now. You can still change the game.</p>
+          ) : (
+            <div className={`grid gap-2 ${t ? "grid-cols-2" : "grid-cols-3"}`}>
+              <Field label={t ? "First small blind" : "Small"}><input className="input" type="number" inputMode="numeric" min={1} value={cfg.smallBlind} onChange={num("smallBlind")} /></Field>
+              <Field label={t ? "First big blind" : "Big"}><input className="input" type="number" inputMode="numeric" min={1} value={cfg.bigBlind} onChange={num("bigBlind")} /></Field>
+              {!t && <Field label="Ante"><input className="input" type="number" inputMode="numeric" min={0} value={cfg.ante} onChange={num("ante")} /></Field>}
+            </div>
+          )}
           <div className="grid grid-cols-2 gap-2">
-            <Field label="Max buy-in"><input className="input" type="number" inputMode="numeric" min={1} value={cfg.startingStack} onChange={num("startingStack")} /></Field>
+            {!started && <Field label={t ? "Starting stack" : "Max buy-in"}><input className="input" type="number" inputMode="numeric" min={1} value={cfg.startingStack} onChange={num("startingStack")} /></Field>}
             <Field label="Timer (s)"><input className="input" type="number" inputMode="numeric" min={5} max={300} value={Math.round(cfg.actionTimerMs / 1000)} onChange={(e) => set("actionTimerMs", Number(e.target.value) * 1000)} /></Field>
           </div>
+          {t && !started && tour && <TournamentFields value={tour} onChange={setTour} />}
           {view.flags.squid && <BoardsPicker boards={cfg.boards} squid={cfg.squid} onChange={(b, sq) => setCfg((c) => ({ ...c, boards: b, squid: sq, redRiver: b > 1 ? false : c.redRiver }))} />}
           {view.flags.redRiver && cfg.boards === 1 && <Toggle label="Red river" hint="When the river is red, keep dealing until a black card lands. One betting round after. Single board only; never run twice." checked={cfg.redRiver} onChange={(v) => set("redRiver", v)} />}
-          {view.flags.runItTwice && <RunsPicker value={cfg.maxRuns} onChange={(n) => set("maxRuns", n)} />}
+          {view.flags.runItTwice && !t && <RunsPicker value={cfg.maxRuns} onChange={(n) => set("maxRuns", n)} />}
           {view.flags.shortDeck && <Toggle label="Short deck (6+)" hint={`Removes the 2s through 5s (36 cards). Flush beats full house, trips beat a straight, A-6-7-8-9 is a straight.${VARIANTS[cfg.variant].hiLo ? " Not used for PLO Hi-Lo, which always plays the full deck." : ""}`} checked={cfg.shortDeck} onChange={(v) => set("shortDeck", v)} />}
-          {view.flags.straddle && <Toggle label="Allow straddles" hint="Under the gun may post 2× the big blind before the deal and act last preflop." checked={cfg.straddle} onChange={(v) => set("straddle", v)} />}
+          {view.flags.straddle && !t && <Toggle label="Allow straddles" hint="Under the gun may post 2× the big blind before the deal and act last preflop." checked={cfg.straddle} onChange={(v) => set("straddle", v)} />}
           {view.flags.dealersChoice && view.flags.variants && <DealersChoicePicker value={cfg.dealersChoice} onChange={(v) => set("dealersChoice", v)} />}
-          <button className="btn btn-primary w-full" disabled={!dirty} onClick={() => send({ t: "config", patch: cfg })}>Apply settings</button>
+          <button className="btn btn-primary w-full" disabled={!dirty} onClick={apply}>Apply settings</button>
         </section>
 
         <section className="space-y-2">
@@ -225,8 +286,8 @@ export function HostPanel({ open, onClose, view, send }: { open: boolean; onClos
           <ul className="card-surface divide-y divide-border">
             {players.map((p) => (
               <li key={p.playerId} className="flex items-center gap-2 p-3">
-                <p className="flex-1 text-sm"><span className="font-bold">{p.name}</span> {p.isHost && <Crown size={14} className="inline text-gold" aria-label="host" />} <span className="text-muted">· seat {p.seat + 1} · {p.stack.toLocaleString()}</span></p>
-                {!p.isHost && (
+                <p className="flex-1 text-sm"><span className="font-bold">{p.name}</span> {p.isHost && <Crown size={14} className="inline text-gold" aria-label="host" />} <span className="text-muted">· seat {p.seat + 1} · {p.stack.toLocaleString()}</span>{p.away && <span className="pill ml-1.5">away</span>}</p>
+                {!p.isHost && !started && (
                   <button className="btn btn-danger btn-xs" onClick={() => { if (confirm(`Remove ${p.name} from the table?`)) send({ t: "kick", playerId: p.playerId }); }} aria-label={`Remove ${p.name}`}><UserX size={16} /> Kick</button>
                 )}
               </li>
@@ -334,7 +395,34 @@ export function TauntPopover({ open, onClose, onPick }: { open: boolean; onClose
   );
 }
 
-export function EndedModal({ results, me }: { results: SessionResultRow[]; me: string }) {
+export function EndedModal({ results, me, tournament }: { results: SessionResultRow[]; me: string; tournament?: boolean }) {
+  if (tournament) {
+    const rows = [...results].sort((a, b) => (a.place ?? 99) - (b.place ?? 99) || b.cashOut - a.cashOut);
+    return (
+      <Modal open title="Tournament over">
+        {rows.length === 0 ? (
+          <p className="text-sm text-muted mb-4">The tournament was called off before it started. Nobody paid and nothing was recorded.</p>
+        ) : (
+          <table className="w-full text-sm mb-4">
+            <thead className="text-xs uppercase tracking-wider text-dim">
+              <tr><th className="text-left py-1.5 font-semibold w-12">Place</th><th className="text-left py-1.5 font-semibold">Player</th><th className="text-right py-1.5 font-semibold">Prize</th><th className="text-right py-1.5 font-semibold">Net</th></tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.userId} className={`border-t border-border ${r.userId === me ? "bg-brand/10" : ""}`}>
+                  <td className="py-2 text-muted num">{r.place ? (r.place === 1 ? "🏆" : ordinal(r.place)) : ""}</td>
+                  <td className="py-2 font-semibold">{r.name}</td>
+                  <td className="py-2 text-right num font-bold text-gold-bright">{r.cashOut > 0 ? r.cashOut.toLocaleString() : <span className="text-dim font-normal">0</span>}</td>
+                  <td className={`py-2 text-right font-bold num ${r.net > 0 ? "text-green-bright" : r.net < 0 ? "text-[#ff8b8e]" : ""}`}>{fmtNet(r.net)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        <button className="btn btn-primary w-full" onClick={() => navigate("/")}>Back to lobby</button>
+      </Modal>
+    );
+  }
   return (
     <Modal open title="Session over">
       <table className="w-full text-sm mb-4">

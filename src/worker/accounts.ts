@@ -50,7 +50,8 @@ CREATE TABLE IF NOT EXISTS tables (
   status TEXT NOT NULL,
   players INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
+  updated_at INTEGER NOT NULL,
+  tournament INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS hud (
   user_id TEXT PRIMARY KEY,
@@ -120,6 +121,9 @@ export class AccountsDO extends DurableObject<Env> {
     ctx.blockConcurrencyWhile(async () => {
       this.sql.exec(SCHEMA);
       this.migrateAdmins();
+      // Databases created before tournaments: add the lobby marker column.
+      const cols = this.sql.exec<{ name: string }>("PRAGMA table_info(tables)").toArray();
+      if (!cols.some((c) => c.name === "tournament")) this.sql.exec("ALTER TABLE tables ADD COLUMN tournament INTEGER NOT NULL DEFAULT 0");
     });
   }
 
@@ -296,11 +300,11 @@ export class AccountsDO extends DurableObject<Env> {
 
   // ---------- tables ----------
 
-  async registerTable(t: { code: string; name: string; hostId: string; hostName: string; variant: Variant; smallBlind: number; bigBlind: number }): Promise<void> {
+  async registerTable(t: { code: string; name: string; hostId: string; hostName: string; variant: Variant; smallBlind: number; bigBlind: number; tournament?: boolean }): Promise<void> {
     const now = Date.now();
     this.sql.exec(
-      "INSERT INTO tables (code, name, host_id, host_name, variant, small_blind, big_blind, status, players, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'waiting', 0, ?, ?)",
-      t.code, t.name, t.hostId, t.hostName, t.variant, t.smallBlind, t.bigBlind, now, now,
+      "INSERT INTO tables (code, name, host_id, host_name, variant, small_blind, big_blind, status, players, created_at, updated_at, tournament) VALUES (?, ?, ?, ?, ?, ?, ?, 'waiting', 0, ?, ?, ?)",
+      t.code, t.name, t.hostId, t.hostName, t.variant, t.smallBlind, t.bigBlind, now, now, t.tournament ? 1 : 0,
     );
     this.sql.exec("INSERT OR IGNORE INTO table_members (code, user_id) VALUES (?, ?)", t.code, t.hostId);
   }
@@ -319,7 +323,7 @@ export class AccountsDO extends DurableObject<Env> {
   async myTables(userId: string): Promise<TableSummary[]> {
     const rows = this.sql.exec<{
       code: string; name: string; status: TableStatus; host_id: string; host_name: string; variant: Variant;
-      small_blind: number; big_blind: number; players: number; created_at: number;
+      small_blind: number; big_blind: number; players: number; created_at: number; tournament: number | null;
     }>(
       `SELECT t.* FROM tables t JOIN table_members m ON m.code = t.code
        WHERE m.user_id = ? AND t.status != 'ended' AND t.updated_at > ? ORDER BY t.updated_at DESC LIMIT 20`,
@@ -327,7 +331,7 @@ export class AccountsDO extends DurableObject<Env> {
     ).toArray();
     return rows.map((r) => ({
       code: r.code, name: r.name, status: r.status, hostId: r.host_id, hostName: r.host_name, variant: r.variant,
-      smallBlind: r.small_blind, bigBlind: r.big_blind, players: r.players, createdAt: r.created_at,
+      smallBlind: r.small_blind, bigBlind: r.big_blind, players: r.players, createdAt: r.created_at, tournament: !!r.tournament,
     }));
   }
 

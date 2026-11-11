@@ -16,6 +16,8 @@ import { EndedModal, HostPanel, LogChat, PlayerMenu, SitSheet, TauntPopover, typ
 import { HudStrip, PlayerSheet } from "../components/Hud";
 import { Toast } from "../components/ui";
 import { NextGameStrip, RulesSheet } from "../components/Guide";
+import { TourneySheet, TourneyStrip } from "../components/Tournament";
+import { ordinal } from "@engine/tournament";
 import { useAuth } from "../lib/auth";
 
 /** Seat anchor positions (percent of the table area), index 0 = bottom centre, proceeding clockwise on screen. */
@@ -134,6 +136,7 @@ export function TablePage({ code }: { code: string }) {
   const closeTaunt = useCallback(() => setTauntOpen(false), []);
   const [rulesOpen, setRulesOpen] = useState(false);
   const [rulesFor, setRulesFor] = useState<Variant | null>(null);
+  const [tourneyOpen, setTourneyOpen] = useState(false);
   const [areaH, setAreaH] = useState(0);
   const areaObs = useRef<ResizeObserver | null>(null);
   const areaRef = useCallback((el: HTMLDivElement | null) => {
@@ -160,6 +163,7 @@ export function TablePage({ code }: { code: string }) {
     setPanel((p) => (p === "log" ? p : null));
     setRulesOpen(false);
     setTauntOpen(false);
+    setTourneyOpen(false);
   }, [myTurnKey]);
 
   // unread chat badge
@@ -274,6 +278,9 @@ export function TablePage({ code }: { code: string }) {
   const myCardSize = landscape ? 60 : variant.holeCards >= 5 ? 44 : variant.holeCards === 4 ? 50 : 60;
   const otherCardSize = landscape ? 30 : variant.holeCards >= 5 ? 20 : 26;
   const bottomWinner = showdown && winners.size > 0 ? [...winners.entries()].sort((a, b) => b[1] - a[1])[0] : null;
+  const tourney = view.tournament;
+  // a tournament takes no new players once the cards are in the air
+  const seatsClosed = !!tourney?.started;
 
   return (
     <div className="h-full flex flex-col overflow-hidden" style={{ paddingTop: "var(--sat)" }}>
@@ -312,6 +319,7 @@ export function TablePage({ code }: { code: string }) {
           </button>
         )}
       </header>
+      {tourney && <TourneyStrip view={view} offset={offset} onOpen={() => setTourneyOpen(true)} />}
       {view.dealerChoice?.picking && view.status === "running" && (
         <NextGameStrip
           chooserName={view.seats[view.dealerChoice.picking.chooser]?.name ?? "The next dealer"}
@@ -381,16 +389,18 @@ export function TablePage({ code }: { code: string }) {
               </>
             ) : (
               <div className="text-center">
-                <p className="font-extrabold text-lg" style={{ fontFamily: "var(--font-display)" }}>{view.status === "ended" ? "Session over" : "Waiting to start"}</p>
+                <p className="font-extrabold text-lg" style={{ fontFamily: "var(--font-display)" }}>{view.status === "ended" ? (tourney ? "Tournament over" : "Session over") : tourney ? "Seats are open" : "Waiting to start"}</p>
                 <p className="text-sm text-muted">
-                  {view.seats.filter(Boolean).length < 2 ? "Need at least 2 players" : view.me.isHost ? "Tap Start once everyone's seated" : "The host will start the game"}
+                  {view.seats.filter(Boolean).length < 2 ? "Need at least 2 players"
+                    : tourney ? (view.me.isHost ? "Start once everyone's in. No late entries, no rebuys." : "The host starts once everyone's in")
+                    : view.me.isHost ? "Tap Start once everyone's seated" : "The host will start the game"}
                 </p>
                 <button className="mt-2 pill normal-case tracking-normal text-xs px-3 py-1 whitespace-nowrap" onClick={copyLink}>
                   Code <span className="font-black tracking-[0.15em] text-text">{code}</span>
                 </button>
                 <p className="text-[11px] text-dim mt-1">Tap the code to copy the invite link</p>
                 {view.me.isHost && view.status !== "ended" && view.seats.filter(Boolean).length >= 2 && (
-                  <button className="btn btn-green mt-3 anim-pop" onClick={() => send({ t: "start" })}>Start game</button>
+                  <button className="btn btn-green mt-3 anim-pop" onClick={() => send({ t: "start" })}>{tourney ? "Start tournament" : "Start game"}</button>
                 )}
               </div>
             )}
@@ -425,7 +435,7 @@ export function TablePage({ code }: { code: string }) {
                     extra={hudOn ? <HudStrip counters={view.hud[seat.playerId]} /> : null}
                   />
                 </div>
-              ) : (
+              ) : seatsClosed ? null : (
                 <button
                   className="absolute -translate-x-1/2 -translate-y-1/2 w-14 h-14 rounded-full border-2 border-dashed border-white/25 text-white/60 text-xs font-bold hover:border-gold hover:text-gold transition-colors disabled:opacity-30"
                   style={{ left: `${p.x}%`, top: `${p.y}%` }}
@@ -492,7 +502,7 @@ export function TablePage({ code }: { code: string }) {
           ) : amDiscarding ? (
             <DiscardBar selected={selectedCard} count={hand!.pendingDiscard.length} onDiscard={() => selectedCard !== null && act({ type: "discard", amount: selectedCard })} />
           ) : (
-            <StatusBar view={view} onSit={() => setSitSeat(firstEmpty(view.seats))} onStart={() => send({ t: "start" })} onRabbit={() => send({ t: "rabbit" })} onShow={() => send({ t: "show" })} />
+            <StatusBar view={view} onSit={() => setSitSeat(firstEmpty(view.seats))} onStart={() => send({ t: "start" })} onBack={() => send({ t: "sitIn" })} onRabbit={() => send({ t: "rabbit" })} onShow={() => send({ t: "show" })} />
           )}
           </div>
         </div>
@@ -502,11 +512,12 @@ export function TablePage({ code }: { code: string }) {
       </div>
       <RulesSheet open={rulesOpen} onClose={() => { setRulesOpen(false); setRulesFor(null); }} current={rulesFor ?? hand?.variant ?? view.config.variant} flags={flags} />
 
-      <SitSheet open={sitSeat !== null} seat={sitSeat} config={view.config} onClose={() => setSitSeat(null)} onSit={(seat, buyIn) => { send({ t: "sit", seat, buyIn }); setSitSeat(null); }} />
+      <TourneySheet open={tourneyOpen} onClose={() => setTourneyOpen(false)} view={view} offset={offset} />
+      <SitSheet open={sitSeat !== null} seat={sitSeat} config={view.config} tournament={tourney} onClose={() => setSitSeat(null)} onSit={(seat, buyIn) => { send({ t: "sit", seat, buyIn }); setSitSeat(null); }} />
       <HostPanel open={panel === "host"} onClose={() => setPanel(null)} view={view} send={send} />
       <PlayerMenu open={panel === "me"} onClose={() => setPanel(null)} view={view} send={send} />
       <PlayerSheet seat={playerSheet !== null ? view.seats[playerSheet] ?? null : null} session={playerSheet !== null ? view.hud[view.seats[playerSheet]?.playerId ?? ""] : undefined} onClose={() => setPlayerSheet(null)} />
-      {ended && <EndedModal results={ended} me={view.me.userId} />}
+      {ended && <EndedModal results={ended} me={view.me.userId} tournament={!!tourney} />}
     </div>
   );
 }
@@ -551,24 +562,35 @@ function CenterStatus({ view, landscape }: { view: TableView; landscape: boolean
   return <p className={`text-xs font-semibold text-center ${tone} ${landscape ? "text-sm" : ""} bg-black/40 rounded-full px-3 py-1 anim-fade-up`} key={text}>{text}</p>;
 }
 
-function StatusBar({ view, onSit, onStart, onRabbit, onShow }: { view: TableView; onSit: () => void; onStart: () => void; onRabbit: () => void; onShow: () => void }) {
+function StatusBar({ view, onSit, onStart, onBack, onRabbit, onShow }: { view: TableView; onSit: () => void; onStart: () => void; onBack: () => void; onRabbit: () => void; onShow: () => void }) {
   const hand = view.hand;
   const mySeat = view.me.seat !== null ? view.seats[view.me.seat] : null;
   const players = view.seats.filter(Boolean).length;
+  const t = view.tournament;
+  const mine = t?.standings.find((s) => s.userId === view.me.userId) ?? null;
+  const champ = t?.over ? t.standings.find((s) => s.place === 1) ?? null : null;
   let text: string;
   let action: { label: string; onClick: () => void; cls: string } | null = null;
-  if (view.status === "ended") text = "This session has ended.";
+  if (view.status === "ended") text = t ? "This tournament has ended." : "This session has ended.";
+  else if (t?.started && mine && mine.place !== null && mine.place !== 1) {
+    text = `You finished ${ordinal(mine.place)}${mine.prize > 0 ? ` and won ${fmtChips(mine.prize)}` : ""}.${champ ? ` ${champ.name} wins the tournament.` : " You can keep watching."}`;
+  } else if (champ) {
+    text = `${champ.userId === view.me.userId ? "You win" : `${champ.name} wins`} the tournament${champ.prize > 0 ? ` and ${champ.userId === view.me.userId ? "take" : "takes"} ${fmtChips(champ.prize)}` : ""}!`;
+  } else if (!mySeat && t?.started) text = "This tournament is under way. You're watching.";
   else if (!mySeat) {
-    text = players >= view.config.maxSeats ? "Table's full. You're watching." : "Tap an empty seat to join.";
+    text = players >= view.config.maxSeats ? "Table's full. You're watching." : t ? "Tap an empty seat to enter the tournament." : "Tap an empty seat to join.";
     if (players < view.config.maxSeats) action = { label: "Take a seat", onClick: onSit, cls: "btn-primary" };
+  } else if (mySeat.away) {
+    text = "You're sitting out. Your hands are folded and your blinds keep going in.";
+    action = { label: "I'm back", onClick: onBack, cls: "btn-green" };
   } else if (mySeat.status === "sittingOut") text = "You're sitting out. Open your menu to come back.";
   else if (mySeat.stack === 0 && !mySeat.inHand) text = "You're out of chips. Rebuy from your menu.";
   else if (!hand || hand.phase === "showdown") {
     if (view.status === "running") text = view.timer?.kind === "nextHand" ? "Next hand starting…" : "Waiting for another player. The next hand deals itself.";
-    else if (view.status === "paused") text = "Game paused by the host.";
+    else if (view.status === "paused") text = t ? "Tournament paused. The blind clock is stopped." : "Game paused by the host.";
     else {
-      text = view.me.isHost ? (players >= 2 ? "Everyone seated? Start the game." : "Share the link so friends can join.") : "Waiting for the host to start.";
-      if (view.me.isHost && players >= 2) action = { label: "Start game", onClick: onStart, cls: "btn-green" };
+      text = view.me.isHost ? (players >= 2 ? (t ? "Everyone in? Start the tournament." : "Everyone seated? Start the game.") : "Share the link so friends can join.") : t ? "You're in. Waiting for the host to start." : "Waiting for the host to start.";
+      if (view.me.isHost && players >= 2) action = { label: t ? "Start tournament" : "Start game", onClick: onStart, cls: "btn-green" };
     }
   } else if (hand.phase === "discard") text = "Waiting for others to discard…";
   else if (hand.phase === "runChoice") {

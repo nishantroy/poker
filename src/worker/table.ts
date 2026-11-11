@@ -2,12 +2,13 @@ import { DurableObject } from "cloudflare:workers";
 import {
   EngineError, GHOST_SEAT, VARIANTS, VARIANT_IDS, riverBoardSize, advance, applyAction, boardsThatFit, ghostChips, canStartHand, chooseRuns, cryptoRng, nextButtonSeat, computePots, createGame, forfeit, getLimits, isHandLive,
   participants, rabbitBoards, removePlayer, seatPlayer, setGhost, startHand, timeout,
-  type GameEvent, type GameState, type TableConfig, type Variant,
+  TOURNEY_LIMITS, blindsAt, bustPlaces, levelAt, ordinal, prizeTable, settle, validateTournament,
+  type GameEvent, type GameState, type Seat, type TableConfig, type TournamentSetup, type Variant,
 } from "@engine/index";
 import { addHud, emptyHud, hudFromHand, type HandRecord, type HudCounters } from "@engine/hud";
 import type {
   ChatMessage, ClientMessage, SeatAction, HandRecordView, HandSummary, LogLine, PublicGhost, PublicSeat, RebuyRequest, ServerMessage, SessionResultRow, TableOptions,
-  TableStatus, TableView, TimerInfo,
+  TableStatus, TableView, TimerInfo, TournamentInfo, TourneyStanding,
 } from "@shared/protocol";
 import { LIMITS, TAUNTS, defaultOptions, validateConfig } from "@shared/protocol";
 import { type Flags, defaultFlags, normalizeFlags } from "@shared/flags";
@@ -22,6 +23,32 @@ interface Departed {
   handsPlayed: number;
   biggestPot: number;
 }
+
+/** Sit-and-go tournament state (rules live in @engine/tournament). */
+interface Tourney extends TournamentSetup {
+  /** Opening blinds and stack, fixed when the tournament starts. */
+  startSb: number;
+  startBb: number;
+  startStack: number;
+  /** null while players are still taking seats. */
+  startedAt: number | null;
+  /** Playing time on the level clock up to `clockSince`. The clock only runs while the table is running. */
+  clockMs: number;
+  /** When the clock was last started; null while it is stopped. */
+  clockSince: number | null;
+  /** Blind level in force (the clock may be ahead until the next deal). */
+  level: number;
+  entrants: { userId: string; name: string }[];
+  /** Knocked-out players, in the order they went. */
+  finished: { userId: string; name: string; place: number; handsPlayed: number; biggestPot: number }[];
+  /** Players the table plays for (check or fold at once): "self" sat out, "auto" timed out or dropped off. */
+  away: Record<string, "self" | "auto">;
+  /** One player has every chip. */
+  over: boolean;
+}
+
+/** Table settings a tournament never uses: its blinds come from the level clock. */
+const tourneyRules = (c: TableConfig): TableConfig => ({ ...c, ante: 0, straddle: false, maxRuns: 1 });
 
 interface Meta {
   code: string;
@@ -78,6 +105,8 @@ interface Meta {
   straddlers: string[];
   /** Seats that chose to show their cards after the current hand ended. */
   shown: { hand: number; seats: number[] };
+  /** Set when this table is a tournament. */
+  tourney: Tourney | null;
 }
 
 interface Attachment {
@@ -91,6 +120,10 @@ const NEXT_HAND_DELAY_SHOWDOWN_MS = 6000;
 const DISCARD_TIMER_MS = 20_000;
 const RUN_CHOICE_MS = 12_000;
 const BAD_BEAT_EXTRA_MS = 3000;
+/** Tournament: how long the table waits before acting for a player who is away. */
+const AWAY_ACTION_MS = 1500;
+/** Tournament: how long the final showdown stays up before the results. */
+const FINISH_DELAY_MS = 7000;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -197,6 +230,7 @@ export class TableDO extends DurableObject<Env> {
           flags: normalizeFlags(m.flags), ghostVote: m.ghostVote ?? null,
           gameChoice: m.gameChoice ?? null, gameChosenFor: m.gameChosenFor ?? 0, lastChooser: m.lastChooser ?? null, orbitLeft: m.orbitLeft ?? 0, firstButton: m.firstButton ?? null,
           lastActions: m.lastActions ?? {}, endPending: m.endPending ?? false, rabbitShownHands: m.rabbitShownHands ?? [], shown: m.shown ?? { hand: 0, seats: [] }, straddlers: m.straddlers ?? [],
+          tourney: m.tourney ?? null,
         } as Meta;
       }
       if (r.key === "game") {
@@ -240,7 +274,7 @@ export class TableDO extends DurableObject<Env> {
 
   // ---------- RPC (from the Worker) ----------
 
-  async init(args: { code: string; name: string; hostId: string; hostName: string; config: TableConfig; flags?: Flags }): Promise<void> {
+  async init(args: { code: string; name: string; hostId: string; hostName: string; config: TableConfig; flags?: Flags; tournament?: TournamentSetup | null }): Promise<void> {
     if (this.meta) return;
     this.meta = {
       code: args.code, name: args.name, hostId: args.hostId, hostName: args.hostName, status: "waiting",
@@ -248,17 +282,21 @@ export class TableDO extends DurableObject<Env> {
       pendingConfig: null, autoSatOut: [], options: defaultOptions(), hud: {}, cur: null, unlocked: [], votes: {}, rabbitShown: null,
       flags: args.flags ? normalizeFlags(args.flags) : defaultFlags(),
       ghostVote: null, gameChoice: null, gameChosenFor: 0, lastChooser: null, orbitLeft: 0, firstButton: null, lastActions: {}, endPending: false, rabbitShownHands: [], shown: { hand: 0, seats: [] }, straddlers: [],
+      tourney: args.tournament
+        ? { ...args.tournament, startSb: 0, startBb: 0, startStack: 0, startedAt: null, clockMs: 0, clockSince: null, level: 0, entrants: [], finished: [], away: {}, over: false }
+        : null,
     };
-    this.game = createGame(validateConfig(args.config));
-    this.log("system", `Table created by ${args.hostName}.`);
+    const config = validateConfig(args.config);
+    this.game = createGame(args.tournament ? tourneyRules(config) : config);
+    this.log("system", args.tournament ? `Tournament set up by ${args.hostName}. Take a seat; the host starts it when everyone is in.` : `Table created by ${args.hostName}.`);
     this.save();
   }
 
-  async summary(): Promise<{ code: string; name: string; status: TableStatus; hostId: string; hostName: string; config: TableConfig; players: number } | null> {
+  async summary(): Promise<{ code: string; name: string; status: TableStatus; hostId: string; hostName: string; config: TableConfig; players: number; tournament: boolean } | null> {
     if (!this.meta || !this.game) return null;
     return {
       code: this.meta.code, name: this.meta.name, status: this.meta.status, hostId: this.meta.hostId, hostName: this.meta.hostName,
-      config: this.game.config, players: this.game.seats.filter(Boolean).length,
+      config: this.game.config, players: this.game.seats.filter(Boolean).length, tournament: !!this.meta.tourney,
     };
   }
 
@@ -334,8 +372,10 @@ export class TableDO extends DurableObject<Env> {
     // reconnect: clear disconnected flag
     const seat = this.seatOf(userId);
     this.slog("info", "ws.connect", { user: name, userId, seat: seat?.seat ?? null, wasDisconnected: seat?.disconnected ?? null, autoSatOut: seat ? this.meta.autoSatOut.includes(seat.seat) : null, sockets: this.ctx.getWebSockets().length });
-    if (seat && (seat.disconnected || this.meta.autoSatOut.includes(seat.seat))) {
+    const wasAway = !!seat && this.liveTourney()?.away[userId] === "auto";
+    if (seat && (seat.disconnected || this.meta.autoSatOut.includes(seat.seat) || wasAway)) {
       seat.disconnected = false;
+      if (wasAway) this.comeBack(seat); // dropped off or timed out in a tournament: showing up again is enough
       if (this.meta.autoSatOut.includes(seat.seat)) {
         this.meta.autoSatOut = this.meta.autoSatOut.filter((x) => x !== seat.seat);
         if (seat.status === "sittingOut") {
@@ -458,8 +498,11 @@ export class TableDO extends DurableObject<Env> {
         if (this.seatOf(att.userId)) throw new EngineError("already_seated", "You are already seated");
         const seatNo = Number(msg.seat);
         if (!Number.isInteger(seatNo) || seatNo < 0 || seatNo >= g.seats.length) throw new EngineError("bad_seat", "No such seat");
+        const t = meta.tourney;
+        if (t && t.startedAt !== null) throw new EngineError("tournament_started", "This tournament has already started");
         const maxBuy = g.config.startingStack;
-        const buyIn = Math.floor(Number(msg.buyIn));
+        // a tournament has one entry: everyone starts with the same stack
+        const buyIn = t ? maxBuy : Math.floor(Number(msg.buyIn));
         if (!Number.isFinite(buyIn) || buyIn < g.config.bigBlind || buyIn > maxBuy) {
           throw new EngineError("bad_buyin", `Buy-in must be between ${g.config.bigBlind} and ${maxBuy}`);
         }
@@ -476,7 +519,7 @@ export class TableDO extends DurableObject<Env> {
           // their earlier cash-out is money already in their pocket; keep it as a separate ledger entry
           meta.departed.push({ ...prior, handsPlayed: 0, buyIn: 0 });
         }
-        this.log("system", `${att.name} sat down with ${buyIn}.`);
+        this.log("system", t ? `${att.name} is in.` : `${att.name} sat down with ${buyIn}.`);
         this.afterChange();
         void accounts(this.env).updateTable(meta.code, { players: this.playerCount(), memberId: att.userId });
         return;
@@ -485,6 +528,8 @@ export class TableDO extends DurableObject<Env> {
       case "stand": {
         const seat = this.seatOf(att.userId);
         if (!seat) throw new EngineError("not_seated", "You are not seated");
+        // A running tournament has no cashing out: the stack stays and is blinded off.
+        if (this.liveTourney()) return this.goAway(seat);
         this.leaveSeat(seat.seat, "left the table", true);
         return;
       }
@@ -492,6 +537,7 @@ export class TableDO extends DurableObject<Env> {
       case "sitOut": {
         const seat = this.seatOf(att.userId);
         if (!seat) throw new EngineError("not_seated", "You are not seated");
+        if (this.liveTourney()) return this.goAway(seat);
         seat.status = "sittingOut";
         meta.autoSatOut = meta.autoSatOut.filter((x) => x !== seat.seat);
         this.log("system", `${seat.name} is sitting out.`);
@@ -502,6 +548,11 @@ export class TableDO extends DurableObject<Env> {
       case "sitIn": {
         const seat = this.seatOf(att.userId);
         if (!seat) throw new EngineError("not_seated", "You are not seated");
+        if (this.liveTourney()) {
+          this.comeBack(seat);
+          this.afterChange();
+          return;
+        }
         seat.status = "active";
         seat.disconnected = false;
         meta.autoSatOut = meta.autoSatOut.filter((x) => x !== seat.seat);
@@ -575,6 +626,7 @@ export class TableDO extends DurableObject<Env> {
           throw new EngineError("stale", "That action is out of date");
         }
         const res = applyAction(g, seat.seat, msg.action);
+        this.comeBack(seat); // acting yourself means you are back
         this.applyStep(res.state, res.events);
         return;
       }
@@ -583,6 +635,7 @@ export class TableDO extends DurableObject<Env> {
         const g = this.game!;
         const seat = this.seatOf(att.userId);
         if (!seat) throw new EngineError("not_seated", "You are not seated");
+        if (meta.tourney) throw new EngineError("no_rebuys", "There are no rebuys in a tournament");
         const amount = Math.floor(Number(msg.amount));
         if (!Number.isFinite(amount) || amount < g.config.bigBlind || amount > g.config.startingStack) {
           throw new EngineError("bad_amount", `Rebuy must be between ${g.config.bigBlind} and ${g.config.startingStack}`);
@@ -600,6 +653,7 @@ export class TableDO extends DurableObject<Env> {
 
       case "approveRebuy": {
         requireHost();
+        if (meta.tourney) throw new EngineError("no_rebuys", "There are no rebuys in a tournament");
         const req = meta.rebuyRequests.find((r) => r.playerId === msg.playerId);
         if (!req) return;
         meta.rebuyRequests = meta.rebuyRequests.filter((r) => r !== req);
@@ -612,8 +666,17 @@ export class TableDO extends DurableObject<Env> {
       case "start": {
         requireHost();
         if (meta.status === "running") return;
+        const t = meta.tourney;
+        if (t?.over) return;
+        if (t && t.startedAt === null) {
+          requireFlag(meta.flags.tournaments);
+          this.startTourney(t);
+          return;
+        }
         meta.status = "running";
-        this.log("system", "Game started.");
+        this.log("system", t ? "Tournament resumed." : "Game started.");
+        const hostSeat = this.seatOf(att.userId);
+        if (hostSeat) this.comeBack(hostSeat); // the host is clearly here
         if (canStartHand(this.game!)) this.beginHand();
         else this.afterChange();
         this.syncTableStatus();
@@ -624,7 +687,7 @@ export class TableDO extends DurableObject<Env> {
         requireHost();
         if (meta.status !== "running") return;
         meta.status = "paused";
-        this.log("system", "Game paused. The current hand will finish.");
+        this.log("system", meta.tourney ? "Tournament paused: the blind clock stops. The current hand will finish." : "Game paused. The current hand will finish.");
         this.afterChange();
         this.syncTableStatus();
         return;
@@ -634,7 +697,9 @@ export class TableDO extends DurableObject<Env> {
         requireHost();
         if (meta.status !== "paused") return;
         meta.status = "running";
-        this.log("system", "Game resumed.");
+        this.log("system", meta.tourney ? "Tournament resumed." : "Game resumed.");
+        const hostSeat = this.seatOf(att.userId);
+        if (hostSeat) this.comeBack(hostSeat); // the host is clearly here
         if (!isHandLive(this.game!) && canStartHand(this.game!)) this.beginHand();
         else this.afterChange();
         this.syncTableStatus();
@@ -646,6 +711,7 @@ export class TableDO extends DurableObject<Env> {
         const seat = this.seatOf(msg.playerId);
         if (!seat) return;
         if (seat.playerId === meta.hostId) throw new EngineError("bad_kick", "You cannot kick yourself");
+        if (this.liveTourney()) throw new EngineError("no_kick", "Nobody can be removed from a running tournament. A player who is away is blinded off.");
         this.leaveSeat(seat.seat, "was removed by the host", false);
         return;
       }
@@ -653,7 +719,11 @@ export class TableDO extends DurableObject<Env> {
       case "config": {
         requireHost();
         const g = this.game!;
-        const merged = validateConfig({ ...g.config, ...msg.patch, maxSeats: g.config.maxSeats });
+        const t = meta.tourney;
+        let merged = validateConfig({ ...g.config, ...msg.patch, maxSeats: g.config.maxSeats });
+        if (t) merged = tourneyRules(merged);
+        // once the cards are in the air the stack is fixed and the blinds follow the level clock
+        if (t && t.startedAt !== null) merged = { ...merged, smallBlind: g.config.smallBlind, bigBlind: g.config.bigBlind, startingStack: g.config.startingStack };
         if (!meta.flags.variants && merged.variant !== "nlhe") throw new EngineError("disabled", "Omaha and Pineapple are switched off right now");
         if (!meta.flags.squid && merged.boards > 1) throw new EngineError("disabled", "Multi-board games are switched off right now");
         const changes: string[] = [];
@@ -670,9 +740,11 @@ export class TableDO extends DurableObject<Env> {
         if (merged.dealersChoice !== g.config.dealersChoice) changes.push(merged.dealersChoice === "off" ? "dealer's choice off" : `dealer's choice each ${merged.dealersChoice}`);
         if (!meta.flags.dealersChoice && merged.dealersChoice !== "off") throw new EngineError("disabled", "Dealer's choice is switched off right now");
         if (merged.actionTimerMs !== g.config.actionTimerMs) changes.push(`timer → ${Math.round(merged.actionTimerMs / 1000)}s`);
-        if (merged.startingStack !== g.config.startingStack) changes.push(`buy-in → ${merged.startingStack}`);
+        if (merged.startingStack !== g.config.startingStack) changes.push(t ? `starting stack → ${merged.startingStack}` : `buy-in → ${merged.startingStack}`);
         if (isHandLive(g)) meta.pendingConfig = merged; // applied by beginHand so the live hand's rules never change
         else g.config = merged;
+        // still taking seats: everyone already seated gets the new starting stack
+        if (t && t.startedAt === null) for (const st of g.seats) if (st) { st.stack = merged.startingStack; st.totalBuyIn = merged.startingStack; }
         if (changes.length) this.log("system", `Host changed ${changes.join(", ")}${isHandLive(g) ? " (from next hand)" : ""}.`);
         this.afterChange();
         void accounts(this.env).updateTable(meta.code, {
@@ -681,12 +753,28 @@ export class TableDO extends DurableObject<Env> {
         return;
       }
 
+      case "tournament": {
+        requireHost();
+        const t = meta.tourney;
+        if (!t) throw new EngineError("not_tournament", "This is not a tournament table");
+        if (t.startedAt !== null) throw new EngineError("tournament_started", "The tournament has already started");
+        const patch = typeof msg.patch === "object" && msg.patch ? msg.patch : {};
+        const next = validateTournament({ buyIn: t.buyIn, levelMs: t.levelMs, payouts: t.payouts, ...patch })!;
+        if (next.buyIn === t.buyIn && next.levelMs === t.levelMs && next.payouts === t.payouts) return;
+        t.buyIn = next.buyIn;
+        t.levelMs = next.levelMs;
+        t.payouts = next.payouts;
+        this.log("system", `Host set the tournament: buy-in ${next.buyIn}, ${Math.round(next.levelMs / 60_000)}-minute levels, ${next.payouts === "winner" ? "winner takes all" : "top places paid"}.`);
+        this.afterChange();
+        return;
+      }
+
       case "end": {
         requireHost();
         if (isHandLive(this.game!)) {
           if (meta.endPending) return;
           meta.endPending = true;
-          this.log("system", "The host is ending the session. It ends when this hand finishes.");
+          this.log("system", this.liveTourney() ? "The host is ending the tournament. It ends when this hand finishes." : "The host is ending the session. It ends when this hand finishes.");
           this.afterChange();
           return;
         }
@@ -722,6 +810,7 @@ export class TableDO extends DurableObject<Env> {
 
       case "ghostVote": {
         requireFlag(meta.flags.ghost);
+        if (meta.tourney) throw new EngineError("no_ghost", "The ghost does not play tournaments");
         const g = this.game!;
         const mine = this.seatOf(att.userId);
         if (!mine) throw new EngineError("not_seated", "Only seated players can vote on the ghost");
@@ -812,8 +901,10 @@ export class TableDO extends DurableObject<Env> {
       g.config = validateConfig(meta.pendingConfig);
       meta.pendingConfig = null;
     }
+    const tourney = this.liveTourney();
+    if (tourney && !this.tourneyBeforeHand(tourney)) return;
     // players who dropped off before the hand sit out automatically (and return when they reconnect)
-    for (const s of g.seats) if (s && s.disconnected && s.status === "active") {
+    for (const s of g.seats) if (!tourney && s && s.disconnected && s.status === "active") {
       s.status = "sittingOut";
       if (!meta.autoSatOut.includes(s.seat)) meta.autoSatOut.push(s.seat);
       this.log("system", `${s.name} is sitting out (disconnected).`);
@@ -833,7 +924,7 @@ export class TableDO extends DurableObject<Env> {
       const straddleSeats = meta.flags.straddle
         ? g.seats.flatMap((st) => (st && meta.straddlers.includes(st.playerId) ? [st.seat] : []))
         : [];
-      res = startHand(g, undefined, { allowGhost: meta.flags.ghost, allowRuns: meta.flags.runItTwice, firstButton: meta.firstButton ?? undefined, straddleSeats, allowRedRiver: meta.flags.redRiver });
+      res = startHand(g, undefined, { allowGhost: meta.flags.ghost && !meta.tourney, allowRuns: meta.flags.runItTwice, firstButton: meta.firstButton ?? undefined, straddleSeats, allowRedRiver: meta.flags.redRiver });
     } catch (e) {
       if (e instanceof EngineError && e.code === "deck_short") {
         this.slog("warn", "hand.skip", { reason: "deck_short", message: e.message, seats: this.seatsSnapshot(), config: g.config, ghost: g.ghost });
@@ -983,10 +1074,241 @@ export class TableDO extends DurableObject<Env> {
       if (seat) this.departSeat(seatNo);
     }
     meta.leaving = [];
+    const tourney = this.liveTourney();
+    if (tourney && !tourney.over) this.tourneyAfterHand(tourney, rec);
     if (meta.endPending) this.endSession();
   }
 
+  // ---------- tournament ----------
+
+  /** The tournament being played here, once it has started. null at cash tables and while seats are still open. */
+  private liveTourney(): Tourney | null {
+    const t = this.meta?.tourney;
+    return t && t.startedAt !== null ? t : null;
+  }
+
+  /** Playing time on the level clock. */
+  private tourneyElapsed(t: Tourney): number {
+    return t.clockMs + (t.clockSince !== null ? Math.max(0, Date.now() - t.clockSince) : 0);
+  }
+
+  /** Keep the level clock in step with the table: it runs only while the table is running. */
+  private tickClock() {
+    const t = this.liveTourney();
+    if (!t) return;
+    const now = Date.now();
+    if (t.clockSince !== null) t.clockMs += Math.max(0, now - t.clockSince);
+    t.clockSince = this.meta!.status === "running" && !t.over ? now : null;
+  }
+
+  private tourneyPrizes(t: Tourney): number[] {
+    return prizeTable(t.entrants.length, t.buyIn, t.payouts);
+  }
+
+  /** Prize money per userId: the knocked out by place, plus whoever still holds chips (see `settle`). */
+  private tourneyPay(t: Tourney, remaining: { id: string; chips: number }[], prizes = this.tourneyPrizes(t)): Record<string, number> {
+    return settle(prizes, t.finished.map((f) => ({ id: f.userId, place: f.place })), remaining);
+  }
+
+  /** Host starts the tournament: seats close, everyone gets the same stack, the clock starts. */
+  private startTourney(t: Tourney) {
+    const g = this.game!;
+    const meta = this.meta!;
+    const seated = g.seats.filter((x): x is Seat => !!x);
+    if (seated.length < 2) throw new EngineError("need_players", "A tournament needs at least two players");
+    const now = Date.now();
+    g.config = tourneyRules(g.config);
+    t.startSb = g.config.smallBlind;
+    t.startBb = g.config.bigBlind;
+    t.startStack = g.config.startingStack;
+    for (const s of seated) {
+      s.status = "active";
+      s.stack = t.startStack;
+      s.totalBuyIn = t.startStack;
+      s.pendingAdd = 0;
+    }
+    meta.autoSatOut = [];
+    meta.rebuyRequests = [];
+    t.entrants = seated.map((s) => ({ userId: s.playerId, name: s.name }));
+    t.finished = [];
+    t.away = {};
+    t.startedAt = now;
+    t.clockMs = 0;
+    t.clockSince = now;
+    t.level = 0;
+    meta.status = "running";
+    const prizes = this.tourneyPrizes(t);
+    const pool = prizes.reduce((a, b) => a + b, 0);
+    const money = pool > 0 ? ` Prize pool ${pool}: ${prizes.map((p, i) => `${ordinal(i + 1)} ${p}`).join(", ")}.` : "";
+    this.log("system", `🏆 Tournament started: ${seated.length} players, ${t.startStack} chips each. Blinds ${t.startSb}/${t.startBb}, going up every ${fmtMinutes(t.levelMs)}.${money}`);
+    this.slog("info", "tourney.start", { entrants: seated.length, buyIn: t.buyIn, levelMs: t.levelMs, payouts: t.payouts, prizes, stack: t.startStack, sb: t.startSb, bb: t.startBb });
+    if (canStartHand(g)) this.beginHand();
+    else this.afterChange();
+    this.syncTableStatus();
+  }
+
+  /**
+   * Before every tournament deal: clear the seats of knocked-out players, mark dropped-off players away,
+   * and set the blinds from the level clock. Returns false when no hand should be dealt.
+   */
+  private tourneyBeforeHand(t: Tourney): boolean {
+    const g = this.game!;
+    const meta = this.meta!;
+    if (t.over) {
+      this.afterChange();
+      return false;
+    }
+    // knocked-out players kept their seat for the showdown; they watch from the rail now
+    const out = new Set(t.finished.map((f) => f.userId));
+    for (const s of g.seats) if (s && out.has(s.playerId)) g.seats[s.seat] = null;
+    const alive = g.seats.filter((x): x is Seat => !!x);
+    for (const s of alive) {
+      s.status = "active"; // nobody sits out of a tournament: an away player is still dealt in
+      if (s.disconnected && !t.away[s.playerId]) {
+        t.away[s.playerId] = "auto";
+        this.log("system", `${s.name} is away (disconnected): the table checks or folds for them until they are back.`);
+        this.slog("info", "tourney.away", { seat: s.seat, user: s.name, why: "disconnected" });
+      }
+    }
+    if (alive.length >= 2 && alive.every((s) => t.away[s.playerId])) {
+      meta.status = "paused";
+      this.log("system", "Everyone is away, so the tournament is paused. The host can resume it.");
+      this.slog("info", "hand.skip", { reason: "tournament_all_away", seats: this.seatsSnapshot() });
+      this.afterChange();
+      this.syncTableStatus();
+      return false;
+    }
+    const level = levelAt(this.tourneyElapsed(t), t.levelMs);
+    const b = blindsAt(Math.max(level, t.level), t.startSb, t.startBb);
+    if (level > t.level) {
+      t.level = level;
+      this.log("system", `⏫ Level ${level + 1}: blinds go up to ${b.sb}/${b.bb}.`);
+      this.slog("info", "tourney.level", { level, sb: b.sb, bb: b.bb });
+      void accounts(this.env).updateTable(meta.code, { smallBlind: b.sb, bigBlind: b.bb, players: alive.length });
+    }
+    g.config = tourneyRules({ ...g.config, smallBlind: b.sb, bigBlind: b.bb });
+    return true;
+  }
+
+  /** After every tournament hand: give the players who lost their last chip a finishing place, and spot the winner. */
+  private tourneyAfterHand(t: Tourney, rec: HandRecord) {
+    const g = this.game!;
+    const done = new Set(t.finished.map((f) => f.userId));
+    const inPlay = g.seats.filter((s): s is Seat => !!s && !done.has(s.playerId));
+    const busts = inPlay.filter((s) => s.stack <= 0);
+    if (busts.length) {
+      const places = bustPlaces(inPlay.length, busts.map((s) => ({ id: s.playerId, startStack: rec.players.find((p) => p.playerId === s.playerId)?.startStack ?? 0 })));
+      for (const pl of places) {
+        const s = busts.find((b) => b.playerId === pl.id)!;
+        t.finished.push({ userId: s.playerId, name: s.name, place: pl.place, handsPlayed: s.handsPlayed, biggestPot: s.biggestPot });
+        delete t.away[s.playerId];
+      }
+      const pay = this.tourneyPay(t, []);
+      for (const pl of places) {
+        const s = busts.find((b) => b.playerId === pl.id)!;
+        const won = pay[pl.id] ?? 0;
+        this.log("result", `💀 ${s.name} is out in ${ordinal(pl.place)} place${won > 0 ? ` and wins ${won}` : ""}.`);
+      }
+      this.slog("info", "tourney.bust", { places, left: inPlay.length - busts.length });
+    }
+    const alive = inPlay.filter((s) => s.stack > 0);
+    if (alive.length <= 1) {
+      t.over = true;
+      const w = alive[0];
+      if (w) {
+        const won = this.tourneyPay(t, [{ id: w.playerId, chips: w.stack }])[w.playerId] ?? 0;
+        this.log("result", `🏆 ${w.name} wins the tournament${won > 0 ? ` and takes ${won}` : ""}!`);
+      }
+      this.slog("info", "tourney.over", { winner: w?.name ?? null, hands: g.handCount });
+    }
+  }
+
+  /** Mark a tournament player away: they are still dealt in and post blinds, and the table checks or folds for them at once. */
+  private goAway(seat: Seat) {
+    const t = this.liveTourney();
+    const g = this.game!;
+    if (!t || t.over || t.finished.some((f) => f.userId === seat.playerId)) return this.afterChange();
+    const h = g.hand;
+    // on the clock right now: act for them straight away rather than make the table wait
+    const res = h && h.phase === "betting" && h.actor === seat.seat
+      ? applyAction(g, seat.seat, { type: getLimits(g, seat.seat).canCheck ? "check" : "fold" })
+      : null;
+    const was = t.away[seat.playerId];
+    t.away[seat.playerId] = "self";
+    if (!was) this.log("system", `${seat.name} is sitting out. They are still dealt in and their blinds keep going in.`);
+    if (res) return this.applyStep(res.state, res.events);
+    // a discard round that now only waits on away players moves on quickly
+    if (h && h.phase === "discard" && h.pendingDiscard.includes(seat.seat)) this.meta!.timerKey = undefined;
+    this.afterChange();
+  }
+
+  /** A tournament player is back. On the clock, they get a full timer again. Returns true if they had been away. */
+  private comeBack(seat: Seat): boolean {
+    const t = this.liveTourney();
+    if (!t || !t.away[seat.playerId]) return false;
+    delete t.away[seat.playerId];
+    this.log("system", `${seat.name} is back.`);
+    const h = this.game!.hand;
+    if (h && h.phase === "betting" && h.actor === seat.seat) this.meta!.timerKey = undefined;
+    return true;
+  }
+
+  /** Tournament results: everyone paid the buy-in; prizes go by finishing place. Ended early, the rest is split by chips. */
+  private tourneyResults(t: Tourney): SessionResultRow[] {
+    if (t.startedAt === null) return []; // never started: nobody paid in
+    const g = this.game!;
+    const done = new Set(t.finished.map((f) => f.userId));
+    const remaining = g.seats.filter((s): s is Seat => !!s && !done.has(s.playerId));
+    const pay = this.tourneyPay(t, remaining.map((s) => ({ id: s.playerId, chips: s.stack })));
+    const row = (userId: string, name: string, place: number, handsPlayed: number, biggestPot: number): SessionResultRow => {
+      const cashOut = pay[userId] ?? 0;
+      return { userId, name, buyIn: t.buyIn, cashOut, net: cashOut - t.buyIn, handsPlayed, biggestPot, place };
+    };
+    const rows = [
+      ...remaining.map((s) => row(s.playerId, s.name, 1 + remaining.filter((o) => o.stack > s.stack).length, s.handsPlayed, s.biggestPot)),
+      ...t.finished.map((f) => row(f.userId, f.name, f.place, f.handsPlayed, f.biggestPot)),
+    ];
+    return rows.sort((a, b) => a.place! - b.place! || b.net - a.net);
+  }
+
+  private tourneyView(): TournamentInfo | null {
+    const t = this.meta!.tourney;
+    if (!t) return null;
+    const g = this.game!;
+    const started = t.startedAt !== null;
+    const done = new Set(t.finished.map((f) => f.userId));
+    const live = isHandLive(g) ? g.hand! : null;
+    const alive: TourneyStanding[] = g.seats
+      .filter((s): s is Seat => !!s && !done.has(s.playerId))
+      .map((s) => ({ userId: s.playerId, name: s.name, chips: s.stack + (live?.players.find((p) => p.seat === s.seat && p.playerId === s.playerId)?.totalBet ?? 0), place: null, prize: 0 }))
+      .sort((a, b) => b.chips - a.chips);
+    const entrants = started ? t.entrants.length : alive.length;
+    const prizes = prizeTable(entrants, t.buyIn, t.payouts);
+    const winner = t.over && alive.length === 1 ? alive[0]! : null;
+    const pay: Record<string, number> = started ? this.tourneyPay(t, winner ? [{ id: winner.userId, chips: winner.chips }] : [], prizes) : {};
+    if (winner) {
+      winner.place = 1;
+      winner.prize = pay[winner.userId] ?? 0;
+    }
+    const startBlinds = started ? { sb: t.startSb, bb: t.startBb } : { sb: g.config.smallBlind, bb: g.config.bigBlind };
+    return {
+      buyIn: t.buyIn, levelMs: t.levelMs, payouts: t.payouts, startingStack: started ? t.startStack : g.config.startingStack,
+      started, over: t.over, level: t.level,
+      blinds: blindsAt(t.level, startBlinds.sb, startBlinds.bb),
+      nextBlinds: t.level >= TOURNEY_LIMITS.maxLevel ? null : blindsAt(t.level + 1, startBlinds.sb, startBlinds.bb),
+      levelLeftMs: started ? Math.max(0, (t.level + 1) * t.levelMs - this.tourneyElapsed(t)) : t.levelMs,
+      clockRunning: t.clockSince !== null && !t.over,
+      entrants, left: alive.length, pool: prizes.reduce((a, b) => a + b, 0), prizes,
+      standings: [
+        ...alive,
+        ...[...t.finished].sort((a, b) => a.place - b.place).map((f) => ({ userId: f.userId, name: f.name, chips: 0, place: f.place, prize: pay[f.userId] ?? 0 })),
+      ],
+      startBlinds,
+    };
+  }
+
   private afterChange() {
+    this.tickClock();
     this.schedule();
     this.save();
     this.broadcast();
@@ -999,14 +1321,22 @@ export class TableDO extends DurableObject<Env> {
     const now = Date.now();
     let timer: TimerInfo | null = null;
     const h = g.hand;
+    const tourney = this.liveTourney();
+    const away = (seatNo: number) => !!tourney && !!tourney.away[g.seats[seatNo]?.playerId ?? ""];
     if (h && h.phase === "betting" && h.actor !== null) {
-      timer = { kind: "action", at: now + g.config.actionTimerMs, durationMs: g.config.actionTimerMs };
+      const ms = away(h.actor) ? AWAY_ACTION_MS : g.config.actionTimerMs;
+      timer = { kind: "action", at: now + ms, durationMs: ms };
     } else if (h && h.phase === "discard") {
-      timer = { kind: "discard", at: now + DISCARD_TIMER_MS, durationMs: DISCARD_TIMER_MS };
+      const ms = h.pendingDiscard.length > 0 && h.pendingDiscard.every(away) ? AWAY_ACTION_MS : DISCARD_TIMER_MS;
+      timer = { kind: "discard", at: now + ms, durationMs: ms };
     } else if (h && h.phase === "runChoice") {
       timer = { kind: "runChoice", at: now + RUN_CHOICE_MS, durationMs: RUN_CHOICE_MS };
     } else if (h && h.phase === "runout") {
       timer = { kind: "runout", at: now + RUNOUT_PAUSE_MS, durationMs: RUNOUT_PAUSE_MS };
+    } else if ((!h || h.phase === "showdown") && tourney?.over && meta.status !== "ended") {
+      // leave the last showdown on screen, then close the table with the results
+      const d = FINISH_DELAY_MS + (h?.result?.badBeat && meta.flags.badBeat ? BAD_BEAT_EXTRA_MS : 0);
+      timer = { kind: "finish", at: now + d, durationMs: d };
     } else if ((!h || h.phase === "showdown") && meta.status === "running" && canStartHand(g)) {
       const contested = !!h?.result && Object.keys(h.result.hands).length > 0;
       const d = (contested ? NEXT_HAND_DELAY_SHOWDOWN_MS : NEXT_HAND_DELAY_MS) + (h?.result?.badBeat && meta.flags.badBeat ? BAD_BEAT_EXTRA_MS : 0);
@@ -1039,6 +1369,14 @@ export class TableDO extends DurableObject<Env> {
       const h = g.hand;
       if (kind === "action" && h && h.phase === "betting" && h.actor !== null) {
         const res = timeout(g);
+        // Tournament: a player who lets the clock run out is away from now on, so the table is not held up every street.
+        const tourney = this.liveTourney();
+        const actor = g.seats[h.actor];
+        if (tourney && actor && !tourney.away[actor.playerId]) {
+          tourney.away[actor.playerId] = "auto";
+          this.log("system", `${actor.name} is away: the table checks or folds for them until they are back.`);
+          this.slog("info", "tourney.away", { seat: actor.seat, user: actor.name, why: "timeout" });
+        }
         this.applyStep(res.state, res.events);
       } else if (kind === "discard" && h && h.phase === "discard") {
         const res = timeout(g);
@@ -1049,6 +1387,8 @@ export class TableDO extends DurableObject<Env> {
       } else if (kind === "runout" && h && h.phase === "runout") {
         const res = advance(g);
         this.applyStep(res.state, res.events);
+      } else if (kind === "finish" && this.liveTourney()?.over && meta.status !== "ended") {
+        this.endSession();
       } else if (kind === "nextHand" && meta.status === "running" && !isHandLive(g)) {
         this.beginHand();
       } else {
@@ -1128,6 +1468,13 @@ export class TableDO extends DurableObject<Env> {
     const meta = this.meta!;
     // Remove first: if the engine refuses (seat still in a live hand) nothing below may run.
     const next = removePlayer(g, seatNo);
+    if (meta.tourney) {
+      // Only reachable while a tournament is still taking seats: nobody has paid in, so there is nothing for the ledger.
+      meta.autoSatOut = meta.autoSatOut.filter((x) => x !== seatNo);
+      meta.leaving = meta.leaving.filter((x) => x !== seatNo);
+      this.game = next;
+      return;
+    }
     const prior = meta.departed.find((d) => d.userId === seat.playerId);
     const entry: Departed = {
       userId: seat.playerId, name: seat.name,
@@ -1147,6 +1494,7 @@ export class TableDO extends DurableObject<Env> {
   private sessionResults(): SessionResultRow[] {
     const g = this.game!;
     const meta = this.meta!;
+    if (meta.tourney) return this.tourneyResults(meta.tourney);
     const rows = new Map<string, SessionResultRow>();
     for (const d of meta.departed) {
       rows.set(d.userId, { userId: d.userId, name: d.name, buyIn: d.buyIn, cashOut: d.cashOut, net: d.cashOut - d.buyIn, handsPlayed: d.handsPlayed, biggestPot: d.biggestPot });
@@ -1221,8 +1569,10 @@ export class TableDO extends DurableObject<Env> {
     meta.timer = null;
     meta.timerKey = undefined;
     void this.ctx.storage.deleteAlarm();
+    this.tickClock();
     const results = this.sessionResults();
-    this.log("system", "Session ended by the host.");
+    const t = meta.tourney;
+    this.log("system", !t ? "Session ended by the host." : t.over ? "Tournament complete." : t.startedAt !== null ? "Tournament ended early by the host: the prize pool is split by chip count." : "Tournament cancelled by the host.");
     this.save();
     this.broadcast();
     for (const ws of this.ctx.getWebSockets()) this.send(ws, { t: "ended", results });
@@ -1277,6 +1627,7 @@ export class TableDO extends DurableObject<Env> {
     const h = g.hand;
     const mySeat = this.seatOf(userId);
     const showAll = !!h && (h.phase === "showdown" || h.phase === "runout" || h.phase === "runChoice");
+    const tourney = this.liveTourney();
 
     const seats: (PublicSeat | null)[] = g.seats.map((s) => {
       if (!s) return null;
@@ -1295,6 +1646,7 @@ export class TableDO extends DurableObject<Env> {
       const shown = hp ? h?.result?.hands[s.seat] : undefined;
       return {
         seat: s.seat, playerId: s.playerId, name: s.name, stack: s.stack, status: s.status, disconnected: s.disconnected,
+        away: !!tourney?.away[s.playerId],
         isHost: s.playerId === meta.hostId, inHand: !!hp, folded: hp?.folded ?? false, allIn: hp?.allIn ?? false,
         streetBet: hp?.streetBet ?? 0, totalBet: hp?.totalBet ?? 0, cards, discarded: hp?.discarded.length ?? 0,
         revealed: !!hp && ((hp.revealed && showAll && !hp.folded) || shownNow), handName: shown?.name, bestCards: shown?.cards,
@@ -1337,6 +1689,7 @@ export class TableDO extends DurableObject<Env> {
       code: meta.code, name: meta.name, status: meta.status, hostId: meta.hostId, config: g.config, seats, button: g.button,
       handCount: g.handCount, hand, timer: meta.timer, options: meta.options, hud: meta.flags.hud ? meta.hud : {}, flags: meta.flags,
       endPending: meta.endPending,
+      tournament: this.tourneyView(),
       dealerChoice: this.dealersChoiceOn()
         ? {
             mode: g.config.dealersChoice as "hand" | "orbit",
@@ -1446,6 +1799,8 @@ export class TableDO extends DurableObject<Env> {
           this.log("action", `${name(e.seat)} discards`);
           break;
         case "timeout":
+          // a tournament player who is away is played for on every street; saying so once is enough
+          if (this.liveTourney()?.away[state.seats[e.seat]?.playerId ?? ""]) break;
           this.log("system", `${name(e.seat)} timed out`);
           break;
         case "street": {
@@ -1494,3 +1849,8 @@ export class TableDO extends DurableObject<Env> {
 }
 
 type Card = import("@engine/cards").Card;
+
+function fmtMinutes(ms: number): string {
+  const m = Math.round(ms / 60_000);
+  return m === 1 ? "minute" : `${m} minutes`;
+}

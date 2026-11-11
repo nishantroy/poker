@@ -28,6 +28,7 @@ export const FLAG_DEFS = {
   showCards: { label: "Show cards", hint: "After a hand ends, players can choose to show their hole cards to the table.", server: true },
   feedback: { label: "Feedback button", hint: "Players can send bug reports and ideas, filed as GitHub issues.", server: true },
   dealersChoice: { label: "Dealer's choice", hint: "The dealer picks the game each hand or each orbit. Off: those tables keep their current game.", server: true },
+  tournaments: { label: "Tournaments", hint: "Sit-and-go tournaments: one buy-in, rising blinds, play until one player has all the chips. Off: no new tournaments (running ones finish).", server: true },
 } as const;
 
 export type FlagName = keyof typeof FLAG_DEFS;

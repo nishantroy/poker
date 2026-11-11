@@ -7,7 +7,7 @@ import { Sheet } from "./ui";
 
 /** Which house rules to explain, given the operator flags. */
 function houseRulesFor(flags: Flags) {
-  const on: Record<string, boolean> = { redRiver: flags.redRiver, shortDeck: flags.shortDeck, straddle: flags.straddle, runs: flags.runItTwice, dealers: flags.dealersChoice, ghost: flags.ghost, squid: flags.squid, rabbit: flags.rabbitHunt };
+  const on: Record<string, boolean> = { redRiver: flags.redRiver, shortDeck: flags.shortDeck, straddle: flags.straddle, runs: flags.runItTwice, dealers: flags.dealersChoice, ghost: flags.ghost, squid: flags.squid, rabbit: flags.rabbitHunt, tournament: flags.tournaments };
   return HOUSE_RULES.filter((r) => on[r.id] !== false);
 }
 

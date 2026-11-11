@@ -114,6 +114,19 @@ export interface HouseRule {
 
 export const HOUSE_RULES: HouseRule[] = [
   {
+    id: "tournament",
+    title: "Tournaments",
+    body: [
+      "A sit-and-go at one table: everyone pays the same buy-in into the prize pool and starts with the same stack. Seats close when the host starts. There are no rebuys and no late entries.",
+      "Blinds rise on a clock: 1×, 1.5×, 2×, 3×, 4×, 6×, 8× the opening blinds, then the same steps ten times bigger. The clock only counts playing time and a new level starts with the next deal.",
+      "You are out when you lose your last chip. The last player with chips wins. Players knocked out in the same hand finish in order of the chips they started that hand with; equal stacks tie and share the prizes for their places.",
+      "Payouts: winner takes all with up to 3 players, 65% / 35% with 4 to 6, and 50% / 30% / 20% with 7 or more. The host can pick winner takes all instead.",
+      "Nobody leaves with chips. If you sit out, drop off or let your clock run out, you are away: you are still dealt in, your hands are checked or folded at once and your blinds keep going in until you come back. If everyone is away, the tournament pauses.",
+      "There are no antes, straddles, ghost or running it twice in a tournament, and nobody can be kicked once it has started.",
+      "If the host ends it early, the prize money not yet won is split between the players left in proportion to their chips. Results and the leaderboard count the buy-in and prizes, not chips.",
+    ],
+  },
+  {
     id: "runs",
     title: "Running it twice",
     body: [

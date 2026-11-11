@@ -46,7 +46,7 @@ export function SeatView({ seat, isMe, acting, timer, offset, isButton, isWinner
   onTap?: () => void;
   extra?: React.ReactNode;
 }) {
-  const out = seat.status === "sittingOut" || (!seat.inHand && seat.stack === 0);
+  const out = seat.status === "sittingOut" || seat.away || (!seat.inHand && seat.stack === 0);
   const cards = seat.cards ?? [];
   const best = new Set(seat.bestCards ?? []);
   const showCards = cards.length > 0 && !(seat.folded && !isMe && !seat.revealed);
@@ -95,6 +95,7 @@ export function SeatView({ seat, isMe, acting, timer, offset, isButton, isWinner
         <span className="mt-1 text-[11px] font-semibold text-center leading-tight bg-black/70 rounded-md px-1.5 py-0.5 anim-fade-up max-w-[150px]">{seat.handName}</span>
       )}
       {!seat.inHand && seat.status === "sittingOut" && <span className="mt-1 pill">sitting out</span>}
+      {seat.away && !(seat.inHand && seat.folded && !showdown) && <span className="mt-1 pill" title="Sitting out of the tournament: still dealt in, hands folded, blinds keep going in">away</span>}
       {seat.inHand && seat.folded && !showdown && <span className="mt-1 pill">folded</span>}
     </div>
   );

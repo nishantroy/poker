@@ -1,4 +1,4 @@
-import type { HudRow, LeaderboardRow, MeResponse, TableConfig, TableSummary, UserInfo, UserStats } from "@shared/protocol";
+import type { HudRow, LeaderboardRow, MeResponse, TableConfig, TableSummary, TournamentSetup, UserInfo, UserStats } from "@shared/protocol";
 import type { FlagName, Flags } from "@shared/flags";
 
 export class ApiError extends Error {
@@ -27,7 +27,7 @@ export const api = {
   logout: () => call<{ ok: true }>("/api/logout", { method: "POST" }),
   feedback: (body: { kind: "bug" | "idea"; title: string; details: string; context: Record<string, string | number | undefined> }) =>
     call<{ ok: true; filed: boolean; url: string; number?: number }>("/api/feedback", { method: "POST", body: JSON.stringify(body) }),
-  createTable: (name: string, config: Partial<TableConfig>) => call<{ code: string }>("/api/tables", { method: "POST", body: JSON.stringify({ name, config }) }),
+  createTable: (name: string, config: Partial<TableConfig>, tournament?: TournamentSetup) => call<{ code: string }>("/api/tables", { method: "POST", body: JSON.stringify({ name, config, tournament }) }),
   myTables: () => call<{ tables: TableSummary[] }>("/api/tables"),
   table: (code: string) => call<{ table: { code: string; name: string; status: string; hostName: string; config: TableConfig; players: number } }>(`/api/tables/${encodeURIComponent(code)}`),
   leaderboard: () => call<{ rows: LeaderboardRow[] }>("/api/leaderboard"),

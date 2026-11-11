@@ -519,6 +519,143 @@ assert(A.errors.every((e) => e.code === "disabled") && B2.errors.length === 0, "
   assert(E.errors.filter((e) => e.code !== "not_dealer").length === 0 && F.errors.filter((e) => e.code !== "not_dealer").length === 0, "dealer's choice section had no unexpected socket errors");
   E.ws.close(); F.ws.close();
 }
+// ----- tournaments -----
+{
+  const c = await login(`smoke_c_${suffix}`, "1234"), d = await login(`smoke_d_${suffix}`, "1234");
+  const mkT = (who, name, tournament, config = {}) => fetch(`${BASE}/api/tables`, { method: "POST", headers: { "content-type": "application/json", cookie: who.cookie }, body: JSON.stringify({ name, config: { variant: "nlhe", smallBlind: 10, bigBlind: 20, startingStack: 1500, actionTimerMs: 8000, ...config }, tournament }) });
+  const sumNet = (rows) => rows.reduce((x, r) => x + r.net, 0);
+
+  await setFlag("tournaments", false);
+  assert((await mkT(a, "Smoke T off", { buyIn: 20, levelMs: 60000, payouts: "auto" })).status === 403, "tournaments off: no new tournament can be created");
+  await setFlag("tournaments", true);
+
+  // cancelled before the start: nobody paid in
+  {
+    const code = (await (await mkT(a, "Smoke T cancel", { buyIn: 20, levelMs: 60000, payouts: "auto" })).json()).code;
+    const X = await connect(a, code), Y = await connect(b, code);
+    send(X, { t: "sit", seat: 0, buyIn: 1 }); send(Y, { t: "sit", seat: 1, buyIn: 999999 });
+    await wait(300);
+    assert(X.view.tournament && X.view.tournament.started === false && X.view.seats[0].stack === 1500 && X.view.seats[1].stack === 1500, "tournament entry is one fixed stack, whatever buy-in the client sends");
+    assert(X.view.tournament.pool === 40 && X.view.tournament.entrants === 2, "prize pool counts the seated players before the start");
+    send(Y, { t: "stand" }); await wait(300);
+    assert(X.view.seats[1] === null && X.view.tournament.pool === 20, "a player can leave before the tournament starts");
+    send(X, { t: "start" }); await wait(300);
+    assert(X.errors.some((e) => e.code === "need_players") && X.view.tournament.started === false, "a tournament needs two players to start");
+    send(X, { t: "end" }); await wait(400);
+    assert(Array.isArray(X.ended) && X.ended.length === 0, "a tournament cancelled before the start records no results");
+    X.ws.close(); Y.ws.close();
+  }
+
+  // ended early by the host: the prize pool is chopped by chip count
+  {
+    const code = (await (await mkT(a, "Smoke T chop", { buyIn: 25, levelMs: 60000, payouts: "auto" })).json()).code;
+    const X = await connect(a, code), Y = await connect(b, code);
+    send(X, { t: "sit", seat: 0 }); send(Y, { t: "sit", seat: 1 });
+    await wait(300); send(X, { t: "start" }); await wait(500);
+    assert(X.view.tournament.started && X.view.hand?.number === 1 && X.view.tournament.pool === 50, "tournament starts and deals");
+    const h = X.view.hand; send(h.actor === 0 ? X : Y, { t: "action", seq: h.actionSeq, action: { type: "fold" } });
+    await wait(400);
+    send(X, { t: "end" }); await wait(500);
+    const res = X.ended;
+    assert(res && res.length === 2 && sumNet(res) === 0 && res.every((r) => r.buyIn === 25), "early end: both players paid the buy-in and the nets sum to zero");
+    assert(res[0].place === 1 && res[0].cashOut === 26 && res[1].place === 2 && res[1].cashOut === 24, `early end splits the pool by chips (${res.map((r) => r.cashOut).join("/")})`);
+    X.ws.close(); Y.ws.close();
+  }
+
+  // four players, played to a winner
+  const code = (await (await mkT(a, "Smoke tourney", { buyIn: 20, levelMs: 60000, payouts: "auto" })).json()).code;
+  const P = [await connect(a, code), await connect(b, code), await connect(c, code), await connect(d, code)];
+  const ids = [a, b, c, d].map((u) => u.user.id);
+  P.forEach((p, i) => send(p, { t: "sit", seat: i }));
+  await wait(400);
+  send(P[0], { t: "config", patch: { ante: 5, straddle: true, maxRuns: 3, startingStack: 1000 } }); await wait(300);
+  assert(P[0].view.config.ante === 0 && P[0].view.config.straddle === false && P[0].view.config.maxRuns === 1, "tournament tables never have antes, straddles or several runs");
+  assert(P[0].view.seats.filter(Boolean).every((s) => s.stack === 1000) && P[0].view.tournament.startingStack === 1000, "changing the starting stack before the start moves everyone's stack");
+  const tables = await (await fetch(`${BASE}/api/tables`, { headers: { cookie: a.cookie } })).json();
+  assert(tables.tables.find((t) => t.code === code)?.tournament === true, "the lobby marks the table as a tournament");
+  send(P[1], { t: "tournament", patch: { buyIn: 999 } });
+  send(P[0], { t: "tournament", patch: { buyIn: 30.7, levelMs: 5, payouts: "bogus" } }); await wait(300);
+  assert(P[1].errors.some((e) => e.code === "not_host"), "only the host can change the tournament");
+  assert(P[0].view.tournament.buyIn === 30 && P[0].view.tournament.levelMs === 60000 && P[0].view.tournament.payouts === "auto" && P[0].view.tournament.pool === 120, "the host can change the buy-in before the start; hostile values are clamped and only the host may");
+  send(P[0], { t: "tournament", patch: { buyIn: 20 } }); await wait(300);
+  send(P[0], { t: "start" }); await wait(600);
+  const T = () => P[0].view.tournament;
+  assert(T().started && T().entrants === 4 && T().pool === 80 && T().prizes.join("/") === "52/28", "4 players at 20: prize pool 80 pays 52/28");
+  assert(T().level === 0 && T().blinds.bb === 20 && T().nextBlinds.bb === 30 && T().levelLeftMs > 50000 && T().clockRunning, "level 1 blinds 10/20, next 15/30, clock running");
+  assert(T().standings.length === 4 && T().standings.reduce((x, s) => x + s.chips, 0) === 4000 && T().left === 4, "standings count every chip in play, blinds included (4000)");
+  for (const [i, p] of P.entries()) assert(p.view.seats.every((s, j) => !s || j === i || s.cards.every((x) => x === null)), `tournament: player ${i} sees no other hole cards`);
+
+  // what a tournament does not allow
+  const late = await login(`smoke_late_${suffix}`, "1234");
+  const L = await connect(late, code);
+  send(L, { t: "sit", seat: 5 });
+  send(P[1], { t: "rebuy", amount: 500 });
+  send(P[0], { t: "rebuy", amount: 500 });
+  send(P[1], { t: "ghostVote", on: true });
+  send(P[0], { t: "kick", playerId: ids[2] });
+  send(P[0], { t: "config", patch: { smallBlind: 1, bigBlind: 2, startingStack: 5000 } });
+  send(P[0], { t: "tournament", patch: { buyIn: 1, payouts: "winner" } });
+  await wait(500);
+  assert(P[0].errors.some((e) => e.code === "tournament_started") && T().buyIn === 20 && T().pool === 80 && T().prizes.length === 2, "the buy-in and payouts are locked once the tournament has started");
+  assert(L.errors.some((e) => e.code === "tournament_started") && L.view.seats[5] === null, "nobody can sit once the tournament has started");
+  assert(P[1].errors.some((e) => e.code === "no_rebuys") && P[0].errors.some((e) => e.code === "no_rebuys"), "no rebuys in a tournament, not even for the host");
+  assert(P[1].errors.some((e) => e.code === "no_ghost") && P[0].view.ghost.enabled !== true, "no ghost in a tournament");
+  assert(P[0].errors.some((e) => e.code === "no_kick") && P[0].view.seats[2] !== null, "nobody is kicked out of a running tournament");
+  assert(P[0].view.config.bigBlind === 20 && P[0].view.config.startingStack === 1000, "the host cannot change blinds or stacks after the start");
+  L.ws.close();
+
+  // sitting out: the stack stays, the table folds for them
+  send(P[3], { t: "stand" }); await wait(400);
+  assert(P[0].view.seats[3] !== null && P[0].view.seats[3].away === true, "standing up in a tournament keeps the seat and marks the player away");
+  const play = async (until, pickAction, maxMs = 120000) => {
+    const t0 = Date.now();
+    while (!until() && Date.now() - t0 < maxMs) {
+      const h = P[0].view.hand;
+      if (h && h.phase === "betting" && h.actor !== null && !P[0].view.seats[h.actor]?.away) {
+        const p = P[h.actor];
+        const lim = p.view.me?.limits;
+        if (lim && p.view.hand.actionSeq === h.actionSeq) send(p, { t: "action", seq: h.actionSeq, action: { type: pickAction(lim, h.actor) } });
+      }
+      await wait(150);
+    }
+    return until();
+  };
+  const passive = (lim) => (lim.canCheck ? "check" : "call");
+  // check it down for a little over one level; the away player is folded every hand
+  const t1 = Date.now();
+  assert(await play(() => Date.now() - t1 > 66000 && P[0].view.tournament.level >= 1, passive, 100000), "after a minute of play the level goes up");
+  assert(T().level === 1 && P[0].view.config.smallBlind === 15 && P[0].view.config.bigBlind === 30 && T().blinds.bb === 30, "level 2 blinds are 15/30");
+  assert(P[0].log.some((l) => l.includes("Level 2") && l.includes("15/30")), "the blind rise is announced in the log");
+  assert(P[0].view.seats[3].stack < 1000 && P[0].view.seats[3].away === true, `the away player was blinded down (${P[0].view.seats[3].stack})`);
+  assert(!P[0].log.some((l) => l.includes(d.user.username) && l.includes("timed out")), "away players are not announced as timing out");
+  send(P[3], { t: "sitIn" }); await wait(400);
+  assert(P[0].view.seats[3].away === false, "sitting back in clears away");
+
+  // pause stops the clock
+  send(P[0], { t: "pause" }); await wait(300);
+  await play(() => !P[0].view.hand || P[0].view.hand.phase === "showdown", passive, 30000);
+  await wait(300);
+  const left1 = T().levelLeftMs; await wait(1500); send(P[1], { t: "sitIn" }); await wait(300); // any change sends a fresh view
+  assert(P[0].view.status === "paused" && T().clockRunning === false && Math.abs(T().levelLeftMs - left1) < 200, "pausing stops the blind clock");
+  send(P[0], { t: "resume" }); await wait(500);
+  assert(P[0].view.status === "running" && T().clockRunning === true, "resuming starts the clock again");
+
+  // everybody shoves until one player has all the chips
+  const done = await play(() => P[0].ended !== null, (lim) => (lim.canRaise ? "allin" : "call"), 240000);
+  assert(done, "the tournament plays down to a winner and closes the table by itself");
+  const res = P[0].ended;
+  assert(res.length === 4 && sumNet(res) === 0, "tournament nets sum to zero");
+  assert(res.map((r) => r.place).join(",") === "1,2,3,4" || res.filter((r) => r.place === 1).length === 1, `places are assigned (${res.map((r) => r.place).join(",")})`);
+  assert(res[0].place === 1 && res[0].cashOut === 52 && res[0].net === res[0].cashOut - 20 && res.every((r) => r.buyIn === 20), `the winner takes first prize (${res.map((r) => `${r.place}:${r.cashOut}`).join(" ")})`);
+  assert(res.reduce((x, r) => x + r.cashOut, 0) === 80, "the whole prize pool is paid out");
+  assert(T().over && T().standings[0].place === 1 && T().standings[0].prize === res[0].cashOut && T().left === 1, "final standings show the winner and the prize");
+  assert(P[0].log.some((l) => l.includes("wins the tournament")) && P[0].log.filter((l) => l.includes("is out in")).length === 3, "knockouts and the win are announced");
+  await wait(500);
+  const lbT = await (await fetch(`${BASE}/api/leaderboard`, { headers: { cookie: c.cookie } })).json();
+  assert(lbT.rows.some((x) => x.username === c.user.username), "tournament results reach the leaderboard");
+  for (const p of P) assert(p.errors.filter((e) => !["no_rebuys", "no_ghost", "no_kick", "not_host", "tournament_started", "stale", "not_your_turn"].includes(e.code)).length === 0, "tournament section had no unexpected socket errors");
+  P.forEach((p) => p.ws.close());
+}
 A.ws.close(); B2.ws.close();
 console.log("\nSMOKE PASSED");
 process.exit(0);

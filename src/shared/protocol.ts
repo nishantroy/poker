@@ -2,9 +2,10 @@ import type { Card } from "@engine/cards";
 import { type Variant, playableVariant } from "@engine/variants";
 import type { Action, ActionLimits, BadBeat, BoardHand, HandResult, Phase, Street, TableConfig } from "@engine/types";
 import type { HandRecord, HudCounters } from "@engine/hud";
+import type { PayoutMode, TournamentSetup } from "@engine/tournament";
 import type { Flags } from "./flags";
 
-export type { Card, Variant, Action, ActionLimits, BadBeat, BoardHand, HandResult, Phase, Street, TableConfig, HandRecord, HudCounters, Flags };
+export type { Card, Variant, Action, ActionLimits, BadBeat, BoardHand, HandResult, Phase, Street, TableConfig, HandRecord, HudCounters, Flags, PayoutMode, TournamentSetup };
 
 /** Table-level options that the engine does not care about. */
 export interface TableOptions {
@@ -52,6 +53,8 @@ export interface PublicSeat {
   stack: number;
   status: "active" | "sittingOut";
   disconnected: boolean;
+  /** Tournament only: the player is away, so the table checks or folds for them at once (their blinds still go in). */
+  away: boolean;
   isHost: boolean;
   inHand: boolean;
   folded: boolean;
@@ -83,7 +86,7 @@ export interface PublicPot {
 }
 
 export interface TimerInfo {
-  kind: "action" | "discard" | "runChoice" | "runout" | "nextHand";
+  kind: "action" | "discard" | "runChoice" | "runout" | "nextHand" | "finish";
   at: number; // epoch ms
   durationMs: number;
 }
@@ -151,6 +154,50 @@ export interface RebuyRequest {
   seat: number;
 }
 
+export interface TourneyStanding {
+  userId: string;
+  name: string;
+  /** Chips held (0 once knocked out). */
+  chips: number;
+  /** Finishing place; null while still in. */
+  place: number | null;
+  /** Prize won so far (knocked-out players and the winner). */
+  prize: number;
+}
+
+/** Sit-and-go tournament state. Present on every view of a tournament table. */
+export interface TournamentInfo {
+  buyIn: number;
+  levelMs: number;
+  payouts: PayoutMode;
+  /** Chips everyone starts with. */
+  startingStack: number;
+  /** Registration is closed and cards are in the air. */
+  started: boolean;
+  /** One player has every chip; the table closes a few seconds later. */
+  over: boolean;
+  /** Blind level in force (0 = opening blinds). */
+  level: number;
+  blinds: { sb: number; bb: number };
+  /** Blinds at the next level; null at the last level. */
+  nextBlinds: { sb: number; bb: number } | null;
+  /** Playing time left in this level as of `serverTime`. 0 means the blinds go up with the next deal. */
+  levelLeftMs: number;
+  /** The level clock is ticking (it stops while the game is paused). */
+  clockRunning: boolean;
+  /** Players registered (seated before the start, entrants after). */
+  entrants: number;
+  /** Players still holding chips. */
+  left: number;
+  pool: number;
+  /** Prize per paid place, first place first. */
+  prizes: number[];
+  /** Players still in by chips, then the knocked out by place. */
+  standings: TourneyStanding[];
+  /** Blinds for the opening level, for the schedule. */
+  startBlinds: { sb: number; bb: number };
+}
+
 export interface TableView {
   code: string;
   name: string;
@@ -173,6 +220,8 @@ export interface TableView {
   endPending: boolean;
   /** Dealer's choice state; null when the table does not play dealer's choice. */
   dealerChoice: DealerChoiceInfo | null;
+  /** Tournament state; null at a cash table. */
+  tournament: TournamentInfo | null;
   me: {
     userId: string;
     seat: number | null;
@@ -208,6 +257,8 @@ export interface SessionResultRow {
   net: number;
   handsPlayed: number;
   biggestPot: number;
+  /** Tournament only: finishing place. */
+  place?: number;
 }
 
 // ----- client -> server -----
@@ -225,6 +276,8 @@ export type ClientMessage =
   | { t: "kick"; playerId: string }
   | { t: "approveRebuy"; playerId: string; approve: boolean }
   | { t: "config"; patch: Partial<TableConfig> }
+  /** Host, before a tournament starts: change the buy-in, level length or payouts. */
+  | { t: "tournament"; patch: Partial<TournamentSetup> }
   | { t: "end" }
   | { t: "options"; patch: Partial<TableOptions> }
   | { t: "rabbit" }
@@ -324,6 +377,8 @@ export interface TableSummary {
   bigBlind: number;
   players: number;
   createdAt: number;
+  /** A sit-and-go tournament rather than a cash game. */
+  tournament: boolean;
 }
 
 export const LIMITS = {

@@ -14,7 +14,8 @@
     "@engine/evaluate": "./src/engine/evaluate.ts",
     "@engine/engine": "./src/engine/engine.ts",
     "@engine/equity": "./src/engine/equity.ts",
-    "@engine/hud": "./src/engine/hud.ts"
+    "@engine/hud": "./src/engine/hud.ts",
+    "@engine/tournament": "./src/engine/tournament.ts"
   },
   "assets": {
     "directory": "./public",
