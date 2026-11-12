@@ -29,6 +29,7 @@ export const FLAG_DEFS = {
   feedback: { label: "Feedback button", hint: "Players can send bug reports and ideas, filed as GitHub issues.", server: true },
   dealersChoice: { label: "Dealer's choice", hint: "The dealer picks the game each hand or each orbit. Off: those tables keep their current game.", server: true },
   tournaments: { label: "Tournaments", hint: "Sit-and-go tournaments: one buy-in, rising blinds, play until one player has all the chips. Off: no new tournaments (running ones finish).", server: true },
+  whatsNew: { label: "What's new", hint: "The in-app list of recent changes, its lobby banner and the dot that points to it.", server: false },
 } as const;
 
 export type FlagName = keyof typeof FLAG_DEFS;

@@ -17,6 +17,8 @@ import { HudStrip, PlayerSheet } from "../components/Hud";
 import { Toast } from "../components/ui";
 import { NextGameStrip, RulesSheet } from "../components/Guide";
 import { TourneySheet, TourneyStrip } from "../components/Tournament";
+import { NewDot, WhatsNewSheet } from "../components/WhatsNew";
+import { useWhatsNew } from "../lib/whatsNew";
 import { ordinal } from "@engine/tournament";
 import { useAuth } from "../lib/auth";
 
@@ -114,7 +116,7 @@ export function TablePage({ code }: { code: string }) {
   const { flags: authFlags } = useAuth();
   const landscape = useMedia("(orientation: landscape) and (min-width: 640px)");
   const [sitSeat, setSitSeat] = useState<number | null>(null);
-  const [panel, setPanel] = useState<null | "host" | "me" | "log">(null);
+  const [panel, setPanel] = useState<null | "host" | "me" | "log" | "news">(null);
   const [logTab, setLogTab] = useState<SideTab>(authFlags.chat ? "chat" : "log");
   // desktop: log/chat docked beside the table, open by default (remembered per browser)
   const wide = useMedia("(min-width: 1024px) and (orientation: landscape)");
@@ -124,6 +126,7 @@ export function TablePage({ code }: { code: string }) {
   const toggleLog = () => (wide ? setDock(!dockPref) : setPanel(panel === "log" ? null : "log"));
   const [hudPref, setHudOn] = useState(() => { try { return localStorage.getItem("fp:hud") !== "0"; } catch { return true; } });
   const flags = view?.flags ?? authFlags;
+  const news = useWhatsNew(flags);
   const hudOn = hudPref && flags.hud;
   const toggleHud = () => setHudOn((v) => { try { localStorage.setItem("fp:hud", v ? "0" : "1"); } catch { /* ignore */ } return !v; });
   const [playerSheet, setPlayerSheet] = useState<number | null>(null);
@@ -311,7 +314,7 @@ export function TablePage({ code }: { code: string }) {
           {unreadChat > 0 && flags.chat ? <MessageSquare size={18} /> : <ScrollText size={18} />}
           {unreadChat > 0 && flags.chat && <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 rounded-full bg-brand text-on-brand text-[10px] font-black flex items-center justify-center">{unreadChat}</span>}
         </button>
-        <button className="btn btn-ghost btn-sm px-2" onClick={() => setPanel("me")} aria-label="Your options"><User size={18} /></button>
+        <button className="btn btn-ghost btn-sm px-2 relative" onClick={() => setPanel("me")} aria-label="Your options"><User size={18} />{news.unseen.length > 0 && <NewDot />}</button>
         {view.me.isHost && (
           <button className="btn btn-ghost btn-sm px-2 relative" onClick={() => setPanel("host")} aria-label="Host controls">
             <Settings2 size={18} />
@@ -515,7 +518,8 @@ export function TablePage({ code }: { code: string }) {
       <TourneySheet open={tourneyOpen} onClose={() => setTourneyOpen(false)} view={view} offset={offset} />
       <SitSheet open={sitSeat !== null} seat={sitSeat} config={view.config} tournament={tourney} onClose={() => setSitSeat(null)} onSit={(seat, buyIn) => { send({ t: "sit", seat, buyIn }); setSitSeat(null); }} />
       <HostPanel open={panel === "host"} onClose={() => setPanel(null)} view={view} send={send} />
-      <PlayerMenu open={panel === "me"} onClose={() => setPanel(null)} view={view} send={send} />
+      <PlayerMenu open={panel === "me"} onClose={() => setPanel(null)} view={view} send={send} news={news.enabled ? news.unseen.length : null} onNews={() => setPanel("news")} />
+      <WhatsNewSheet open={panel === "news"} onClose={() => setPanel(null)} news={news} />
       <PlayerSheet seat={playerSheet !== null ? view.seats[playerSheet] ?? null : null} session={playerSheet !== null ? view.hud[view.seats[playerSheet]?.playerId ?? ""] : undefined} onClose={() => setPlayerSheet(null)} />
       {ended && <EndedModal results={ended} me={view.me.userId} tournament={!!tourney} />}
     </div>

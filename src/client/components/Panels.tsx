@@ -59,7 +59,11 @@ export function SitSheet({ open, seat, config, tournament, onClose, onSit }: { o
   );
 }
 
-export function PlayerMenu({ open, onClose, view, send }: { open: boolean; onClose: () => void; view: TableView; send: (m: ClientMessage) => void }) {
+export function PlayerMenu({ open, onClose, view, send, news, onNews }: {
+  open: boolean; onClose: () => void; view: TableView; send: (m: ClientMessage) => void;
+  /** Unseen changelog entries; null hides the What's new row. */
+  news: number | null; onNews: () => void;
+}) {
   const me = view.me.seat !== null ? view.seats[view.me.seat] : null;
   const [rebuy, setRebuy] = useState(view.config.startingStack);
   const pending = view.rebuyRequests.find((r) => r.playerId === view.me.userId);
@@ -124,6 +128,7 @@ export function PlayerMenu({ open, onClose, view, send }: { open: boolean; onClo
         ) : (
           <p className="text-muted text-sm">{t?.started && myPlace !== null && myPlace !== 1 ? `You finished ${ordinal(myPlace)}. You can keep watching.` : t?.started ? "This tournament is under way, so the seats are closed. You can watch." : t ? "Tap an empty seat to enter the tournament." : "Tap an empty seat to join the game."}</p>
         )}
+        {news !== null && <button className="btn btn-ghost w-full" onClick={onNews}>What's new {news > 0 && <span className="pill pill-gold">New</span>}</button>}
         {view.flags.feedback && <button className="btn btn-ghost w-full" onClick={() => { onClose(); setFeedback(true); }}>Send feedback or an idea</button>}
         <button className="btn btn-ghost w-full" onClick={() => navigate("/")}>Back to lobby</button>
       </div>

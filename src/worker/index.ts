@@ -1,7 +1,7 @@
 import { AccountsDO, AuthError } from "./accounts";
 import { TableDO } from "./table";
 import { type AuthUser, type Env, SESSION_COOKIE, SESSION_TTL_MS, accounts, error, json, randomCode, readCookie } from "./env";
-import { LIMITS, validateConfig } from "@shared/protocol";
+import { LIMITS, type MeResponse, type UserInfo, validateConfig } from "@shared/protocol";
 import { validateTournament } from "@engine/index";
 import { type Flags, isFlagName } from "@shared/flags";
 import { errFields, slog } from "./slog";
@@ -16,6 +16,8 @@ function cookieHeader(req: Request, token: string | null): string {
 
 interface Ctx {
   user: AuthUser | null;
+  /** The same account as the client sees it (`/api/me`). */
+  info: UserInfo | null;
   isAdmin: boolean;
   flags: Flags;
 }
@@ -24,7 +26,7 @@ async function context(req: Request, env: Env): Promise<Ctx> {
   const token = readCookie(req, SESSION_COOKIE);
   const valid = token && /^[0-9a-f]{64}$/.test(token) ? token : null;
   const me = await accounts(env).me(valid);
-  return { user: me.user ? { id: me.user.id, username: me.user.username } : null, isAdmin: me.isAdmin, flags: me.flags };
+  return { user: me.user ? { id: me.user.id, username: me.user.username } : null, info: me.user, isAdmin: me.isAdmin, flags: me.flags };
 }
 
 const disabled = () => error(403, "disabled", "This feature is switched off right now");
@@ -82,7 +84,7 @@ async function handleApi(req: Request, env: Env, path: string): Promise<Response
     }
     if (path === "/api/me" && method === "GET") {
       const ctx = await context(req, env);
-      return json({ user: ctx.user, isAdmin: ctx.isAdmin, flags: ctx.flags });
+      return json({ user: ctx.info, isAdmin: ctx.isAdmin, flags: ctx.flags } satisfies MeResponse);
     }
     if (path === "/api/status" && method === "GET") {
       // Deploy guard: counts only (no table codes). A table is "in play" when a hand is live, or when the

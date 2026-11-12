@@ -1,4 +1,4 @@
-import { ArrowRight, Crown, LayoutGrid, LogOut, MessageSquarePlus, Plus, Trophy, User, Users } from "lucide-react";
+import { ArrowRight, Crown, LayoutGrid, LogOut, MessageSquarePlus, Plus, Sparkles, Trophy, User, Users } from "lucide-react";
 import { APP_NAME } from "@shared/brand";
 import { useEffect, useState, type FormEvent } from "react";
 import type { LeaderboardRow, TableConfig, TableSummary, TournamentSetup, Variant } from "@shared/protocol";
@@ -13,6 +13,8 @@ import { BoardsPicker, RunsPicker, Toggle } from "../components/Panels";
 import { GAME_GUIDE } from "@shared/guide";
 import { DealersChoicePicker } from "../components/Guide";
 import { FeedbackSheet } from "../components/Feedback";
+import { NewDot, WhatsNewBanner, WhatsNewSheet } from "../components/WhatsNew";
+import { useWhatsNew } from "../lib/whatsNew";
 import { TournamentFields, blindPreview } from "../components/Tournament";
 import { defaultTournament } from "@engine/tournament";
 import { Logo } from "./Login";
@@ -23,6 +25,8 @@ export function LobbyPage() {
   const [board, setBoard] = useState<LeaderboardRow[] | null>(null);
   const [create, setCreate] = useState(false);
   const [feedback, setFeedback] = useState(false);
+  const [newsOpen, setNewsOpen] = useState(false);
+  const news = useWhatsNew(flags);
   const [code, setCode] = useState("");
   const [toast, setToast] = useState<string | null>(null);
 
@@ -48,10 +52,16 @@ export function LobbyPage() {
     <div className="min-h-full max-w-2xl mx-auto px-4 pb-10" style={{ paddingTop: "calc(var(--sat) + 16px)", paddingBottom: "calc(var(--sab) + 40px)" }}>
       <Toast message={toast} />
       <header className="grid grid-cols-[1fr_auto_1fr] items-center mb-7">
-        <div>
+        <div className="flex items-center gap-1">
           {flags.feedback && (
             <button className="btn btn-ghost btn-sm" onClick={() => setFeedback(true)} aria-label="Send feedback or an idea">
               <MessageSquarePlus size={18} aria-hidden="true" /> <span className="hidden sm:inline">Feedback</span>
+            </button>
+          )}
+          {news.enabled && (
+            <button className="btn btn-ghost btn-sm relative" onClick={() => setNewsOpen(true)} aria-label="What's new">
+              <Sparkles size={18} aria-hidden="true" /> <span className="hidden md:inline">What's new</span>
+              {news.unseen.length > 0 && <NewDot />}
             </button>
           )}
         </div>
@@ -66,6 +76,8 @@ export function LobbyPage() {
           <button className="btn btn-ghost btn-sm" onClick={logout} aria-label="Log out"><LogOut size={18} /></button>
         </div>
       </header>
+
+      <WhatsNewBanner news={news} onOpen={() => setNewsOpen(true)} />
 
       <section className="grid gap-3 sm:grid-cols-2 mb-8 anim-fade-up">
         {flags.createTables ? (
@@ -157,6 +169,7 @@ export function LobbyPage() {
 
       <CreateSheet open={create && flags.createTables} onClose={() => setCreate(false)} />
       <FeedbackSheet open={feedback} onClose={() => setFeedback(false)} />
+      <WhatsNewSheet open={newsOpen} onClose={() => setNewsOpen(false)} news={news} />
     </div>
   );
 }
