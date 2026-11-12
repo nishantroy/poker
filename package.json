@@ -2,6 +2,7 @@
   "name": "friends-poker",
   "private": true,
   "version": "0.1.0",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "concurrently -k -n vite,wrangler -c blue,yellow \"vite build --watch\" \"wrangler dev --port 8003 --ip 127.0.0.1\"",
